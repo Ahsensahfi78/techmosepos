@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+pos.db
+pos.db-wal
+pos.db-shm
+*.log
+.env
+.env.*

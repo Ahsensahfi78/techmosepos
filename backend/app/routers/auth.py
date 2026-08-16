@@ -52,7 +52,13 @@ def _valid_user(db: Session, username: str) -> models.User | None:
 @router.post("/login", response_model=schemas.TokenResponse)
 def login(data: schemas.LoginRequest, request: Request, db: Session = Depends(get_db)):
     user = _valid_user(db, data.username)
-    if user is None or not user.is_active or not verify_password(data.password, user.hashed_password):
+    if (
+        user is None
+        or not user.is_active
+        or user.expires_at is not None
+        and user.expires_at < datetime.utcnow()
+        or not verify_password(data.password, user.hashed_password)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -73,7 +79,9 @@ def refresh(data: schemas.RefreshRequest, request: Request, db: Session = Depend
             headers=WWW_AUTHENTICATE,
         )
     user = UserRepository(db).get_by_id(stored.user_id)
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or (
+        user.expires_at is not None and user.expires_at < datetime.utcnow()
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or inactive",

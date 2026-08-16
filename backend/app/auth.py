@@ -71,6 +71,10 @@ def decode_token(token: str, expected_type: Optional[str] = None) -> dict:
     return payload
 
 
+def is_account_expired(user: models.User) -> bool:
+    return user.expires_at is not None and user.expires_at < datetime.utcnow()
+
+
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
@@ -87,6 +91,11 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or inactive",
+        )
+    if is_account_expired(user):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account expired",
         )
     return user
 

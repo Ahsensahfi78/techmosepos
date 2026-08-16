@@ -79,6 +79,7 @@ def create_user(
         full_name=data.full_name,
         role=data.role,
         is_active=data.is_active,
+        expires_at=data.expires_at,
         hashed_password=hash_password(data.password),
     )
     AuditLogRepository(db).log(

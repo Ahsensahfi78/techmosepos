@@ -86,6 +86,16 @@ def _add_sales_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE sale_items ADD COLUMN line_total FLOAT DEFAULT 0"))
 
 
+def _add_user_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("users")}
+    if "expires_at" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN expires_at DATETIME"))
+
+
 def _seed_master_data(engine: Engine) -> None:
     with engine.begin() as conn:
         for name in DEFAULT_DEPARTMENTS:
@@ -140,4 +150,5 @@ def run_migrations(engine: Engine) -> None:
     _add_product_columns(engine)
     _add_payments_columns(engine)
     _add_sales_columns(engine)
+    _add_user_columns(engine)
     _seed_master_data(engine)

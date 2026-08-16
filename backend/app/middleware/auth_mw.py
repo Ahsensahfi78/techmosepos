@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import models
-from ..auth import decode_token
+from ..auth import decode_token, is_account_expired
 from ..database import SessionLocal
 
 PUBLIC_EXACT = {"/", "/ws", "/auth/login", "/auth/refresh"}
@@ -40,6 +40,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         if user is None or not user.is_active:
             return self._unauthorized("User not found or inactive")
+        if is_account_expired(user):
+            return self._unauthorized("Account expired")
 
         request.state.user = user
         return await call_next(request)

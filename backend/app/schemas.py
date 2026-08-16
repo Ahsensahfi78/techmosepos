@@ -78,6 +78,7 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str = Field(min_length=8, max_length=128)
     is_active: bool = True
+    expires_at: Optional[datetime] = None
 
 
 class UserUpdate(BaseModel):
@@ -87,6 +88,7 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     password: Optional[str] = Field(default=None, min_length=8, max_length=128)
     is_active: Optional[bool] = None
+    expires_at: Optional[datetime] = None
 
     @field_validator("role")
     @classmethod
@@ -103,6 +105,7 @@ class UserOut(BaseModel):
     full_name: str
     role: str
     is_active: bool
+    expires_at: Optional[datetime] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

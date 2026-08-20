@@ -1104,6 +1104,7 @@ class EzCashReloadIn(BaseModel):
     phone_number: str = Field(min_length=10, max_length=20)
     amount: float = Field(gt=0)
     payment_method: str = Field(default="cash", max_length=30)
+    carrier: Optional[str] = Field(default=None, max_length=30)
     idempotency_key: Optional[str] = None
     pos_register: Optional[str] = None
 
@@ -1115,10 +1116,15 @@ class EzCashReloadOut(BaseModel):
     normalized_phone: str
     amount: float
     payment_method: Optional[str] = None
+    carrier: Optional[str] = None
+    operator_id: Optional[int] = None
+    operator_name: Optional[str] = None
     status: str
     provider_response: Optional[str] = None
     provider_reference: Optional[str] = None
     failure_reason: Optional[str] = None
+    delivered_amount: Optional[float] = None
+    delivered_currency: Optional[str] = None
     created_by: Optional[int] = None
     created_by_name: Optional[str] = None
     pos_register: Optional[str] = None

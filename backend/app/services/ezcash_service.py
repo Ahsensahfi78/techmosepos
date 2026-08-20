@@ -11,6 +11,16 @@ from .ezcash_provider import get_provider
 _PHONE_RE = re.compile(r"^(?:\+?94|0)?7\d{8}$")
 
 
+def _load_settings(db: Session) -> dict:
+    try:
+        rows = db.query(models.Setting).filter(
+            models.Setting.key.like("ezcash_%")
+        ).all()
+        return {r.key: r.value for r in rows}
+    except Exception:
+        return {}
+
+
 def validate_phone(phone: str) -> str:
     raw = phone.strip()
     digits = re.sub(r"[^\d]", "", raw)
@@ -48,8 +58,9 @@ def create_reload(db: Session, data, user_id: int) -> models.EzCashReload:
 
     normalized = validate_phone(data.phone_number)
 
-    provider = get_provider()
+    provider = get_provider(_load_settings(db))
     reference = _next_reference_number(db)
+    carrier = getattr(data, "carrier", None)
 
     reload = repo.create(
         reference_number=reference,
@@ -57,22 +68,29 @@ def create_reload(db: Session, data, user_id: int) -> models.EzCashReload:
         normalized_phone=normalized,
         amount=data.amount,
         payment_method=data.payment_method,
+        carrier=carrier,
         status=models.EzCashStatus.PENDING.value,
         idempotency_key=data.idempotency_key,
         created_by=user_id,
         pos_register=getattr(data, "pos_register", None),
     )
 
-    result = provider.reload(normalized, data.amount, reference)
+    result = provider.reload(normalized, data.amount, reference, carrier=carrier)
 
     if result.success:
         reload.status = models.EzCashStatus.SUCCESSFUL.value
         reload.provider_reference = result.provider_reference
         reload.provider_response = result.raw_response
+        reload.operator_id = result.operator_id
+        reload.operator_name = result.operator_name
+        reload.delivered_amount = result.delivered_amount
+        reload.delivered_currency = result.delivered_currency
     else:
         reload.status = models.EzCashStatus.FAILED.value
         reload.failure_reason = result.failure_reason
         reload.provider_response = result.raw_response
+        reload.operator_id = result.operator_id
+        reload.operator_name = result.operator_name
 
     db.commit()
     db.refresh(reload)
@@ -95,18 +113,27 @@ def retry_reload(
             detail=f"Cannot retry a {reload.status} transaction",
         )
 
-    provider = get_provider()
-    result = provider.reload(reload.normalized_phone, reload.amount, reload.reference_number)
+    provider = get_provider(_load_settings(db))
+    result = provider.reload(
+        reload.normalized_phone, reload.amount, reload.reference_number,
+        carrier=reload.carrier,
+    )
 
     if result.success:
         reload.status = models.EzCashStatus.SUCCESSFUL.value
         reload.provider_reference = result.provider_reference
         reload.provider_response = result.raw_response
         reload.failure_reason = None
+        reload.operator_id = result.operator_id
+        reload.operator_name = result.operator_name
+        reload.delivered_amount = result.delivered_amount
+        reload.delivered_currency = result.delivered_currency
     else:
         reload.status = models.EzCashStatus.FAILED.value
         reload.failure_reason = result.failure_reason
         reload.provider_response = result.raw_response
+        reload.operator_id = result.operator_id
+        reload.operator_name = result.operator_name
 
     db.commit()
     db.refresh(reload)

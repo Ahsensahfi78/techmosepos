@@ -888,10 +888,15 @@ export interface EzCashReload {
   normalized_phone: string;
   amount: number;
   payment_method: string | null;
+  carrier: string | null;
+  operator_id: number | null;
+  operator_name: string | null;
   status: string;
   provider_response: string | null;
   provider_reference: string | null;
   failure_reason: string | null;
+  delivered_amount: number | null;
+  delivered_currency: string | null;
   created_by: number | null;
   created_by_name: string | null;
   pos_register: string | null;
@@ -903,6 +908,7 @@ export interface EzCashReloadInput {
   phone_number: string;
   amount: number;
   payment_method?: string;
+  carrier?: string;
   idempotency_key?: string;
   pos_register?: string;
 }

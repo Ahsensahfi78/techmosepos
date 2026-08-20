@@ -18,11 +18,10 @@ const FIELDS: { key: string; label: string; hint: string }[] = [
 
 const EZCASH_FIELDS: { key: string; label: string; hint: string; type?: string }[] = [
   { key: "ezcash_enabled", label: "EZ Cash Enabled", hint: "true to enable, false to disable", type: "toggle" },
-  { key: "ezcash_sandbox", label: "Sandbox Mode", hint: "true for test/sandbox, false for live production", type: "toggle" },
-  { key: "ezcash_api_url", label: "API URL", hint: "Provider API endpoint URL (leave empty for sandbox)" },
-  { key: "ezcash_api_key", label: "API Key", hint: "Provider API key for authentication" },
-  { key: "ezcash_api_secret", label: "API Secret", hint: "Provider API secret" },
-  { key: "ezcash_timeout", label: "Request Timeout (seconds)", hint: "HTTP request timeout for provider calls" },
+  { key: "ezcash_sandbox", label: "Sandbox Mode", hint: "true for test/sandbox, false for live Reloadly production", type: "toggle" },
+  { key: "ezcash_client_id", label: "Reloadly Client ID", hint: "Your Reloadly API client ID (from Dashboard > Developers > API Settings)" },
+  { key: "ezcash_client_secret", label: "Reloadly Client Secret", hint: "Your Reloadly API client secret" },
+  { key: "ezcash_timeout", label: "Request Timeout (seconds)", hint: "HTTP request timeout for Reloadly API calls" },
   { key: "ezcash_denominations", label: "Quick Denominations", hint: "Comma-separated amounts (e.g. 100,250,500,1000)" },
 ];
 

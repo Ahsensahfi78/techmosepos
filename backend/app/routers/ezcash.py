@@ -23,10 +23,15 @@ def _reload_out(r: models.EzCashReload) -> schemas.EzCashReloadOut:
         normalized_phone=r.normalized_phone,
         amount=r.amount,
         payment_method=r.payment_method,
+        carrier=r.carrier,
+        operator_id=r.operator_id,
+        operator_name=r.operator_name,
         status=r.status,
         provider_response=r.provider_response,
         provider_reference=r.provider_reference,
         failure_reason=r.failure_reason,
+        delivered_amount=r.delivered_amount,
+        delivered_currency=r.delivered_currency,
         created_by=r.created_by,
         created_by_name=r.user.full_name if r.user else None,
         pos_register=r.pos_register,
@@ -167,8 +172,8 @@ def export_csv(
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "Reference", "Phone", "Normalized Phone", "Amount",
-        "Payment Method", "Status", "Provider Ref", "Failure Reason",
+        "Reference", "Phone", "Normalized Phone", "Amount", "Carrier",
+        "Operator", "Payment Method", "Status", "Provider Ref", "Failure Reason",
         "Cashier", "Created At",
     ])
     for r in items:
@@ -177,6 +182,8 @@ def export_csv(
             r.phone_number,
             r.normalized_phone,
             r.amount,
+            r.carrier or "",
+            r.operator_name or "",
             r.payment_method or "",
             r.status,
             r.provider_reference or "",

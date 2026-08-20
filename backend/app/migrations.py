@@ -96,6 +96,26 @@ def _add_user_columns(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN expires_at DATETIME"))
 
 
+_EZCASH_COLUMNS = {
+    "carrier": "VARCHAR(30)",
+    "operator_id": "INTEGER",
+    "operator_name": "VARCHAR(100)",
+    "delivered_amount": "FLOAT",
+    "delivered_currency": "VARCHAR(10)",
+}
+
+
+def _add_ezcash_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if "ezcash_reloads" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("ezcash_reloads")}
+    for column, ddl in _EZCASH_COLUMNS.items():
+        if column not in existing:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE ezcash_reloads ADD COLUMN {column} {ddl}"))
+
+
 def _seed_master_data(engine: Engine) -> None:
     with engine.begin() as conn:
         for name in DEFAULT_DEPARTMENTS:
@@ -137,6 +157,9 @@ def _seed_master_data(engine: Engine) -> None:
                 ("ezcash_api_secret", ""),
                 ("ezcash_timeout", "30"),
                 ("ezcash_denominations", "100,250,500,1000"),
+                ("ezcash_client_id", ""),
+                ("ezcash_client_secret", ""),
+                ("ezcash_provider", "reloadly"),
             ):
                 exists = conn.execute(
                     text("SELECT 1 FROM settings WHERE key = :k"),
@@ -158,4 +181,5 @@ def run_migrations(engine: Engine) -> None:
     _add_payments_columns(engine)
     _add_sales_columns(engine)
     _add_user_columns(engine)
+    _add_ezcash_columns(engine)
     _seed_master_data(engine)

@@ -13,6 +13,13 @@ const PAYMENT_METHODS = [
   { value: "bank", label: "Bank Transfer" },
 ];
 
+const CARRIERS = [
+  { value: "dialog", label: "Dialog" },
+  { value: "mobitel", label: "Mobitel" },
+  { value: "hutch", label: "Hutch" },
+  { value: "airtel", label: "Airtel" },
+];
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -27,6 +34,7 @@ export default function EzCashReloadModal({ open, onClose, onDone }: Props) {
   const [amount, setAmount] = useState<number>(0);
   const [customAmount, setCustomAmount] = useState("");
   const [method, setMethod] = useState("cash");
+  const [carrier, setCarrier] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<EzCashReload | null>(null);
   const [error, setError] = useState("");
@@ -42,6 +50,7 @@ export default function EzCashReloadModal({ open, onClose, onDone }: Props) {
       setAmount(0);
       setCustomAmount("");
       setMethod("cash");
+      setCarrier("");
       setBusy(false);
       setResult(null);
       setError("");
@@ -75,6 +84,7 @@ export default function EzCashReloadModal({ open, onClose, onDone }: Props) {
         phone_number: phone,
         amount,
         payment_method: method,
+        carrier: carrier || undefined,
         idempotency_key: `ezc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       });
       setResult(reload);
@@ -122,6 +132,21 @@ export default function EzCashReloadModal({ open, onClose, onDone }: Props) {
           <p className="mt-2 text-xs text-slate-400">
             Sri Lankan mobile numbers only (07x, +947x)
           </p>
+          <div className="mt-3">
+            <label className="label">Network Carrier</label>
+            <select
+              value={carrier}
+              onChange={(e) => setCarrier(e.target.value)}
+              className="select"
+            >
+              <option value="">Auto-detect</option>
+              {CARRIERS.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <button onClick={handlePhoneNext} className="btn btn-primary mt-4 w-full">
             Next
           </button>
@@ -209,6 +234,12 @@ export default function EzCashReloadModal({ open, onClose, onDone }: Props) {
               <span className="text-sm text-slate-500">Payment</span>
               <span className="font-semibold capitalize">{method}</span>
             </div>
+            {carrier && (
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-sm text-slate-500">Carrier</span>
+                <span className="font-semibold capitalize">{carrier}</span>
+              </div>
+            )}
           </div>
           {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
           <div className="mt-4 flex gap-2">
@@ -274,6 +305,18 @@ export default function EzCashReloadModal({ open, onClose, onDone }: Props) {
               <span className="text-slate-500">Amount</span>
               <span className="font-bold">{formatMoney(result.amount)}</span>
             </div>
+            {result.operator_name && (
+              <div className="flex justify-between">
+                <span className="text-slate-500">Network</span>
+                <span>{result.operator_name}</span>
+              </div>
+            )}
+            {result.delivered_amount != null && result.delivered_amount !== result.amount && (
+              <div className="flex justify-between">
+                <span className="text-slate-500">Delivered</span>
+                <span className="font-semibold">{result.delivered_amount} {result.delivered_currency}</span>
+              </div>
+            )}
             {result.provider_reference && (
               <div className="flex justify-between">
                 <span className="text-slate-500">Provider Ref</span>

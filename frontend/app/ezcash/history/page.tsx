@@ -146,6 +146,7 @@ export default function EzCashHistoryPage() {
               <tr>
                 <th className="px-4 py-3">Reference</th>
                 <th className="px-4 py-3">Phone</th>
+                <th className="px-4 py-3">Carrier</th>
                 <th className="px-4 py-3 text-right">Amount</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Cashier</th>
@@ -158,6 +159,7 @@ export default function EzCashHistoryPage() {
                 <tr key={r.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-mono text-xs font-semibold">{r.reference_number}</td>
                   <td className="px-4 py-3">{r.phone_number}</td>
+                  <td className="px-4 py-3 text-xs capitalize text-slate-500">{r.operator_name ?? r.carrier ?? "—"}</td>
                   <td className="px-4 py-3 text-right font-bold">{formatMoney(r.amount)}</td>
                   <td className="px-4 py-3">
                     <span
@@ -240,6 +242,18 @@ export default function EzCashHistoryPage() {
                 <span className="text-slate-500">Payment Method</span>
                 <span className="capitalize">{detail.payment_method ?? "—"}</span>
               </div>
+              {detail.operator_name && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Network</span>
+                  <span className="capitalize">{detail.operator_name}</span>
+                </div>
+              )}
+              {detail.delivered_amount != null && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Delivered</span>
+                  <span className="font-semibold">{detail.delivered_amount} {detail.delivered_currency}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-slate-500">Status</span>
                 <span

@@ -727,3 +727,32 @@ class Repair(Base):
     def customer_name(self) -> str:
         return self.customer.name if self.customer else ""
 
+
+class EzCashStatus(str, enum.Enum):
+    PENDING = "pending"
+    SUCCESSFUL = "successful"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class EzCashReload(Base):
+    __tablename__ = "ezcash_reloads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    reference_number = Column(String(50), unique=True, nullable=False, index=True)
+    phone_number = Column(String(20), nullable=False, index=True)
+    normalized_phone = Column(String(15), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    payment_method = Column(String(30), nullable=True)
+    status = Column(String(20), nullable=False, default=EzCashStatus.PENDING.value)
+    provider_response = Column(Text, nullable=True)
+    provider_reference = Column(String(100), nullable=True)
+    failure_reason = Column(Text, nullable=True)
+    idempotency_key = Column(String(100), nullable=True, unique=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    pos_register = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+

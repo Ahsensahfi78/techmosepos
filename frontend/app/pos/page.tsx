@@ -13,6 +13,7 @@ import Modal from "@/components/ui/Modal";
 import PageHeader from "@/components/ui/PageHeader";
 import CartPanel, { type CartLine, lineSubtotal } from "@/components/CartPanel";
 import CheckoutModal, { type SplitLine } from "@/components/CheckoutModal";
+import EzCashReloadModal from "@/components/EzCashReloadModal";
 import ReceiptModal from "@/components/ReceiptModal";
 import { smartSearch, bestMatch, type ProductMatch } from "@/lib/search";
 import {
@@ -105,6 +106,7 @@ export default function PosPage() {
   const [payOpen, setPayOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [ezCashOpen, setEzCashOpen] = useState(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef<HTMLInputElement>(null);
@@ -1408,6 +1410,13 @@ export default function PosPage() {
             ↩️ Returns
           </button>
           <button
+            onClick={() => setEzCashOpen(true)}
+            className="badge bg-white text-slate-500 ring-1 ring-slate-200 transition hover:bg-slate-50"
+            title="EZ Cash Mobile Reload"
+          >
+            📱 EZ Cash
+          </button>
+          <button
             onClick={() => setHelpOpen(true)}
             className="badge bg-slate-900 text-white"
             title="Keyboard shortcuts (F1)"
@@ -2075,6 +2084,11 @@ export default function PosPage() {
           onClose={() => setReceipt(null)}
         />
       )}
+
+      <EzCashReloadModal
+        open={ezCashOpen}
+        onClose={() => setEzCashOpen(false)}
+      />
     </div>
   );
 }

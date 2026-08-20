@@ -11,6 +11,7 @@ import { useTheme } from "@/lib/theme-context";
 const primaryLinks = [
   { href: "/pos", label: "POS", icon: "🛒" },
   { href: "/dashboard", label: "Dashboard", icon: "📊" },
+  { href: "/ezcash", label: "EZ Cash", icon: "📱" },
   { href: "/products", label: "Products", icon: "📱", adminOnly: true },
   { href: "/customers", label: "Customers", icon: "🧑‍🤝‍🧑" },
   { href: "/reports", label: "Reports", icon: "📈", adminOnly: true },
@@ -27,6 +28,7 @@ const secondaryLinks = [
   { href: "/inventory", label: "Inventory", icon: "🧮", staff: true },
   { href: "/warranty", label: "Warranty", icon: "🛡️" },
   { href: "/repairs", label: "Repairs", icon: "🔧" },
+  { href: "/ezcash/history", label: "EZ Cash History", icon: "📋", staff: true },
   { href: "/users", label: "Users", icon: "👥", adminOnly: true },
   { href: "/audit", label: "Audit", icon: "🕵️‍♀️", adminOnly: true },
   { href: "/settings", label: "Settings", icon: "⚙️", adminOnly: true },

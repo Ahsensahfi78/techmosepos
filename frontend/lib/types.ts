@@ -879,3 +879,51 @@ export interface ProductHistorySummary {
   adjustments: number;
   current_stock: number;
 }
+
+// ── EZ Cash Reload ──────────────────────────────────────────────────────
+export interface EzCashReload {
+  id: number;
+  reference_number: string;
+  phone_number: string;
+  normalized_phone: string;
+  amount: number;
+  payment_method: string | null;
+  status: string;
+  provider_response: string | null;
+  provider_reference: string | null;
+  failure_reason: string | null;
+  created_by: number | null;
+  created_by_name: string | null;
+  pos_register: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface EzCashReloadInput {
+  phone_number: string;
+  amount: number;
+  payment_method?: string;
+  idempotency_key?: string;
+  pos_register?: string;
+}
+
+export interface EzCashReloadSummary {
+  date_from: string;
+  date_to: string;
+  total_reloads: number;
+  successful: number;
+  failed: number;
+  cancelled: number;
+  pending: number;
+  total_amount: number;
+  successful_amount: number;
+}
+
+export interface EzCashCashierSummary {
+  user_id: number;
+  name: string;
+  total_reloads: number;
+  successful: number;
+  failed: number;
+  total_amount: number;
+}

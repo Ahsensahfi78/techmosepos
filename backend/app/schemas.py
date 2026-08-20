@@ -1097,3 +1097,52 @@ class GlobalSearchOut(BaseModel):
     suppliers: List[GlobalSearchHit] = []
     products: List[GlobalSearchHit] = []
     transactions: List[TransactionRecord] = []
+
+
+# ── EZ Cash Reload ────────────────────────────────────────────────────────
+class EzCashReloadIn(BaseModel):
+    phone_number: str = Field(min_length=10, max_length=20)
+    amount: float = Field(gt=0)
+    payment_method: str = Field(default="cash", max_length=30)
+    idempotency_key: Optional[str] = None
+    pos_register: Optional[str] = None
+
+
+class EzCashReloadOut(BaseModel):
+    id: int
+    reference_number: str
+    phone_number: str
+    normalized_phone: str
+    amount: float
+    payment_method: Optional[str] = None
+    status: str
+    provider_response: Optional[str] = None
+    provider_reference: Optional[str] = None
+    failure_reason: Optional[str] = None
+    created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
+    pos_register: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EzCashReloadSummary(BaseModel):
+    date_from: str
+    date_to: str
+    total_reloads: int
+    successful: int
+    failed: int
+    cancelled: int
+    pending: int
+    total_amount: float
+    successful_amount: float
+
+
+class EzCashCashierSummary(BaseModel):
+    user_id: int
+    name: str
+    total_reloads: int
+    successful: int
+    failed: int
+    total_amount: float

@@ -41,6 +41,10 @@ ALL_PERMISSIONS: set[str] = {
     "repair.view",
     "backup.manage",
     "export.view",
+    "ezcash.view",
+    "ezcash.create",
+    "ezcash.manage",
+    "ezcash.report",
 }
 
 _MANAGER_PERMISSIONS: set[str] = {
@@ -75,6 +79,9 @@ _MANAGER_PERMISSIONS: set[str] = {
     "repair.manage",
     "repair.view",
     "export.view",
+    "ezcash.view",
+    "ezcash.create",
+    "ezcash.report",
 }
 
 _ACCOUNTANT_PERMISSIONS: set[str] = {
@@ -97,6 +104,8 @@ _ACCOUNTANT_PERMISSIONS: set[str] = {
     "warranty.view",
     "repair.view",
     "export.view",
+    "ezcash.view",
+    "ezcash.report",
 }
 
 _CASHIER_PERMISSIONS: set[str] = {
@@ -111,6 +120,8 @@ _CASHIER_PERMISSIONS: set[str] = {
     "warehouse.view",
     "warranty.view",
     "repair.view",
+    "ezcash.view",
+    "ezcash.create",
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {

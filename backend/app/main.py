@@ -16,6 +16,7 @@ from .routers import (
     auth,
     backup,
     cheques,
+    ezcash,
     finance,
     inventory,
     ledger,
@@ -93,6 +94,7 @@ app.include_router(warranty.router)
 app.include_router(repairs.router)
 app.include_router(backup.router)
 app.include_router(transactions.router)
+app.include_router(ezcash.router)
 
 
 @app.get("/")

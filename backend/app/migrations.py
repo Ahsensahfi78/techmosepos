@@ -130,6 +130,13 @@ def _seed_master_data(engine: Engine) -> None:
                 ("currency", "Rs"),
                 ("receipt_footer", "Thank you for your purchase!\nReturn policy: Items eligible for return within 3 days with receipt."),
                 ("low_stock_threshold", "5"),
+                ("ezcash_enabled", "true"),
+                ("ezcash_sandbox", "true"),
+                ("ezcash_api_url", ""),
+                ("ezcash_api_key", ""),
+                ("ezcash_api_secret", ""),
+                ("ezcash_timeout", "30"),
+                ("ezcash_denominations", "100,250,500,1000"),
             ):
                 exists = conn.execute(
                     text("SELECT 1 FROM settings WHERE key = :k"),

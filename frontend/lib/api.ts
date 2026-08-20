@@ -11,6 +11,10 @@ import type {
   Customer,
   CustomerReport,
   DashboardReport,
+  EzCashCashierSummary,
+  EzCashReload,
+  EzCashReloadInput,
+  EzCashReloadSummary,
   FinanceEntry,
   FinanceEntryInput,
   FinanceSummary,
@@ -637,6 +641,43 @@ export const api = {
   },
   reorder: {
     list: () => request<ReorderItem[]>("/reports/reorder"),
+  },
+  ezcash: {
+    reload: (data: EzCashReloadInput) =>
+      request<EzCashReload>("/ezcash/reload", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    list: (params: {
+      phone?: string;
+      reference?: string;
+      status?: string;
+      date_from?: string;
+      date_to?: string;
+      created_by?: number;
+      amount_min?: number;
+      amount_max?: number;
+      page?: number;
+      page_size?: number;
+    } = {}) =>
+      request<Paginated<EzCashReload>>(
+        `/ezcash/reloads?${toQueryString(params)}`
+      ),
+    get: (id: number) => request<EzCashReload>(`/ezcash/reloads/${id}`),
+    retry: (id: number) =>
+      request<EzCashReload>(`/ezcash/reloads/${id}/retry`, { method: "POST" }),
+    cancel: (id: number) =>
+      request<EzCashReload>(`/ezcash/reloads/${id}/cancel`, {
+        method: "PATCH",
+      }),
+    dailyReport: (params: { date_from?: string; date_to?: string } = {}) =>
+      request<EzCashReloadSummary>(
+        `/ezcash/reports/daily?${toQueryString(params)}`
+      ),
+    cashierReport: (params: { date_from?: string; date_to?: string } = {}) =>
+      request<EzCashCashierSummary[]>(
+        `/ezcash/reports/cashier?${toQueryString(params)}`
+      ),
   },
   backup: {
     download: () => download("/backup/download", "pos-backup.db"),

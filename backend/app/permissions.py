@@ -45,6 +45,7 @@ ALL_PERMISSIONS: set[str] = {
     "ezcash.create",
     "ezcash.manage",
     "ezcash.report",
+    "barcode.print",
 }
 
 _MANAGER_PERMISSIONS: set[str] = {
@@ -82,6 +83,7 @@ _MANAGER_PERMISSIONS: set[str] = {
     "ezcash.view",
     "ezcash.create",
     "ezcash.report",
+    "barcode.print",
 }
 
 _ACCOUNTANT_PERMISSIONS: set[str] = {
@@ -106,6 +108,7 @@ _ACCOUNTANT_PERMISSIONS: set[str] = {
     "export.view",
     "ezcash.view",
     "ezcash.report",
+    "barcode.print",
 }
 
 _CASHIER_PERMISSIONS: set[str] = {
@@ -122,6 +125,7 @@ _CASHIER_PERMISSIONS: set[str] = {
     "repair.view",
     "ezcash.view",
     "ezcash.create",
+    "barcode.print",
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {

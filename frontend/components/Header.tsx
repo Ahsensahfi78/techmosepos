@@ -26,6 +26,7 @@ const secondaryLinks = [
   { href: "/expenses", label: "Expenses & Income", icon: "💸", staff: true },
   { href: "/cheques", label: "Cheques", icon: "💳", staff: true },
   { href: "/inventory", label: "Inventory", icon: "🧮", staff: true },
+  { href: "/barcodes", label: "Print Barcode", icon: "🏷️", staff: true },
   { href: "/warranty", label: "Warranty", icon: "🛡️" },
   { href: "/repairs", label: "Repairs", icon: "🔧" },
   { href: "/ezcash/history", label: "EZ Cash History", icon: "📋", staff: true },

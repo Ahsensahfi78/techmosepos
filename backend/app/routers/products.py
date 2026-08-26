@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import crud, models, schemas
@@ -7,6 +8,10 @@ from ..manager import manager
 from ..permissions import require_permission
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+class BulkDeleteInput(BaseModel):
+    product_ids: list[int]
 
 
 @router.get("", response_model=list[schemas.ProductOut])
@@ -53,6 +58,25 @@ async def update_product(
         {"type": "stock_update", "product": crud.product_to_dict(product)}
     )
     return product
+
+
+@router.post("/bulk-delete", status_code=200)
+async def bulk_delete_products(
+    data: BulkDeleteInput,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_permission("product.manage")),
+):
+    deleted = 0
+    for pid in data.product_ids:
+        product = db.get(models.Product, pid)
+        if product is None:
+            continue
+        db.delete(product)
+        deleted += 1
+    db.commit()
+    for pid in data.product_ids:
+        await manager.broadcast({"type": "product_removed", "id": pid})
+    return {"deleted": deleted}
 
 
 @router.delete("/{product_id}", status_code=204)

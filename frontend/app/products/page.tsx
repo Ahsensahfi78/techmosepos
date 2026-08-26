@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { useStock } from "@/hooks/useStock";
 import { categoryIcon, formatMoney } from "@/lib/constants";
 import { useToast } from "@/components/ui/Toast";
@@ -37,6 +39,9 @@ type StockFilter = "all" | "low" | "out";
 export default function ProductsPage() {
   const { products } = useStock();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const router = useRouter();
+  const canManage = user?.role === "super_admin" || user?.role === "admin" || user?.role === "manager";
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
@@ -50,6 +55,11 @@ export default function ProductsPage() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const masterRef = useRef<HTMLInputElement>(null);
 
   const categories = useMemo(
     () => ["All", ...Array.from(new Set(products.map((p) => p.category)))],
@@ -77,6 +87,49 @@ export default function ProductsPage() {
   }, [products, category, search, stockFilter]);
 
   const sorted = useMemo(() => sortByStockPriority(visible), [visible]);
+
+  const visibleIds = useMemo(() => sorted.map((p) => p.id), [sorted]);
+
+  const selectedCount = selectedIds.size;
+
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id)) && !allVisibleSelected;
+
+  useEffect(() => {
+    const el = masterRef.current;
+    if (el) {
+      el.indeterminate = someVisibleSelected;
+    }
+  }, [someVisibleSelected, selectedCount]);
+
+  const toggleSelectAll = useCallback(() => {
+    if (allVisibleSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        visibleIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        visibleIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+  }, [allVisibleSelected, visibleIds]);
+
+  const toggleProduct = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
 
   function openAdd() {
     setEditing(null);
@@ -175,12 +228,66 @@ export default function ProductsPage() {
     }
   }
 
+  async function confirmBulkDelete() {
+    if (selectedIds.size === 0) return;
+    setBulkDeleting(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const result = await api.products.bulkRemove(ids);
+      toast(`${result.deleted} product${result.deleted !== 1 ? "s" : ""} deleted`, "success");
+      clearSelection();
+      setShowBulkDeleteConfirm(false);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Bulk delete failed", "error");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  function handlePrintBarcode() {
+    const selected = sorted.filter((p) => selectedIds.has(p.id));
+    if (selected.length === 0) return;
+    const payload = selected.map((p) => ({ product: p, qty: 1 }));
+    try {
+      sessionStorage.setItem("barcode-bulk-items", JSON.stringify(payload));
+    } catch {
+      /* ignore */
+    }
+    router.push("/barcodes");
+  }
+
+  function handleExportSelected() {
+    const selected = sorted.filter((p) => selectedIds.has(p.id));
+    if (selected.length === 0) return;
+    const header = ["Name", "SKU", "Barcode", "Category", "Price", "Stock", "Min Stock"];
+    const rows = selected.map((p) => [
+      p.name,
+      p.sku ?? "",
+      p.barcode ?? "",
+      p.category,
+      String(p.price),
+      String(p.stock),
+      String(p.min_stock ?? ""),
+    ]);
+    const csv = [header, ...rows].map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `products-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`${selected.length} product${selected.length !== 1 ? "s" : ""} exported`, "success");
+  }
+
   return (
     <div className="animate-fade-up">
       <PageHeader title="Products" subtitle={`${products.length} items in catalog`}>
-        <button onClick={openAdd} className="btn btn-primary">
-          + Add product
-        </button>
+        {canManage && (
+          <button onClick={openAdd} className="btn btn-primary">
+            + Add product
+          </button>
+        )}
       </PageHeader>
 
       {lowCount > 0 && (
@@ -250,6 +357,73 @@ export default function ProductsPage() {
         </div>
       </div>
 
+      {sorted.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-900">
+          <label className="flex cursor-pointer items-center gap-2 select-none">
+            <input
+              ref={masterRef}
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAll}
+              className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+              aria-label="Select all visible products"
+            />
+            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+              Select All
+            </span>
+          </label>
+          <span className="text-sm text-slate-500">
+            {selectedCount > 0
+              ? `${selectedCount} selected`
+              : `${visibleIds.length} products`}
+          </span>
+          {selectedCount > 0 && (
+            <button
+              onClick={clearSelection}
+              className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600 transition hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+            >
+              Clear Selection
+            </button>
+          )}
+        </div>
+      )}
+
+      {selectedCount > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-800 dark:bg-emerald-900/20">
+          <span className="text-sm font-bold text-emerald-700 dark:text-emerald-300">
+            ☑ {selectedCount} selected
+          </span>
+          <button
+            onClick={clearSelection}
+            className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-600"
+          >
+            Clear
+          </button>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <button
+              onClick={handlePrintBarcode}
+              className="rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600"
+            >
+              🏷️ Print Barcode
+            </button>
+            <button
+              onClick={handleExportSelected}
+              className="rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-600"
+            >
+              📥 Export
+            </button>
+            {canManage && (
+              <button
+                onClick={() => setShowBulkDeleteConfirm(true)}
+                className="rounded-full bg-red-500 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-red-600"
+              >
+                🗑️ Delete
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {sorted.length === 0 ? (
         <EmptyState
           icon="📦"
@@ -261,26 +435,40 @@ export default function ProductsPage() {
           {sorted.map((p) => {
             const tone = stockTone(p.stock, p.min_stock);
             const low = tone.status !== "ok";
+            const isSelected = selectedIds.has(p.id);
             return (
               <div
                 key={p.id}
                 className={`card !p-4 transition hover:shadow-card ${
-                  tone.status === "out"
-                    ? "ring-1 ring-red-200 dark:ring-red-900/40"
-                    : tone.status === "low"
-                      ? "ring-1 ring-amber-200 dark:ring-amber-900/40"
-                      : ""
+                  isSelected
+                    ? "ring-2 ring-emerald-400 dark:ring-emerald-500"
+                    : tone.status === "out"
+                      ? "ring-1 ring-red-200 dark:ring-red-900/40"
+                      : tone.status === "low"
+                        ? "ring-1 ring-amber-200 dark:ring-amber-900/40"
+                        : ""
                 }`}
               >
                 <div className="flex items-start justify-between">
-                  <span className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-2xl">
-                    {categoryIcon(p.category)}
-                  </span>
+                  <div className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleProduct(p.id)}
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      aria-label={`Select ${p.name}`}
+                    />
+                    <span className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-2xl">
+                      {categoryIcon(p.category)}
+                    </span>
+                  </div>
                   <StockBadge stock={p.stock} min={p.min_stock} />
                 </div>
                 <h3 className="mt-3 truncate text-sm font-bold">{p.name}</h3>
                 <p className="text-[11px] font-medium text-slate-400">
-                  {p.category}
+                  {p.sku && `SKU: ${p.sku}`}
+                  {p.sku && p.category && " · "}
+                  {!p.sku && p.category}
                   {p.min_stock ? ` · alert below ${p.min_stock}` : ""}
                 </p>
                 <p className="mt-2 text-base font-bold text-emerald-600">
@@ -481,6 +669,41 @@ export default function ProductsPage() {
             className="btn btn-danger"
           >
             Delete
+          </button>
+        </div>
+      </Modal>
+
+      <Modal
+        open={showBulkDeleteConfirm}
+        onClose={() => setShowBulkDeleteConfirm(false)}
+        title="Delete Selected Products"
+        maxWidth="max-w-sm"
+      >
+        <div className="text-center">
+          <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-red-100 text-2xl">
+            🗑️
+          </span>
+          <p className="mt-3 text-sm text-slate-600">
+            <span className="font-bold text-slate-900">{selectedCount} product{selectedCount !== 1 ? "s" : ""}</span>{" "}
+            {selectedCount === 1 ? "is" : "are"} selected.
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            This action may affect inventory and historical transactions.
+          </p>
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <button
+            onClick={() => setShowBulkDeleteConfirm(false)}
+            className="btn btn-secondary"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmBulkDelete}
+            disabled={bulkDeleting}
+            className="btn btn-danger"
+          >
+            {bulkDeleting ? "Deleting…" : "Delete"}
           </button>
         </div>
       </Modal>

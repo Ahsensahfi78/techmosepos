@@ -391,3 +391,58 @@ body {
     page-break-inside: avoid;
   }
 }
+
+/* ── Barcode label printing ───────────────────────────────────────────── */
+
+@media print {
+  @page {
+    margin: 5mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  #barcode-print-area,
+  #barcode-print-area * {
+    visibility: visible !important;
+  }
+
+  #barcode-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    background: #fff;
+    padding: 0;
+    margin: 0;
+    box-shadow: none;
+    border: none;
+    border-radius: 0;
+  }
+
+  #barcode-print-area .card-header {
+    display: none !important;
+  }
+
+  #barcode-print-area .barcode-grid {
+    gap: 3mm;
+  }
+
+  #barcode-print-area .barcode-cell {
+    border: 0.5pt solid #ccc !important;
+    border-radius: 0 !important;
+    padding: 2mm !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  #barcode-print-area .barcode-label svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

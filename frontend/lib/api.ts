@@ -265,6 +265,11 @@ export const api = {
       }),
     remove: (id: number) =>
       request<void>(`/products/${id}`, { method: "DELETE" }),
+    bulkRemove: (ids: number[]) =>
+      request<{ deleted: number }>("/products/bulk-delete", {
+        method: "POST",
+        body: JSON.stringify({ product_ids: ids }),
+      }),
   },
   sales: {
     create: (data: SaleInput) =>

@@ -305,7 +305,7 @@ export default function BarcodesPage() {
               </div>
 
               {searchOpen && searchResults.length > 0 && (
-                <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-100 bg-white shadow-xl">
+                <div className="absolute z-[35] mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-100 bg-white shadow-xl">
                   {searchResults.map((p) => (
                     <button
                       key={p.id}

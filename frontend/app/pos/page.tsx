@@ -1517,7 +1517,7 @@ export default function PosPage() {
                   className="input pl-11 font-mono"
                 />
                 {scanResults.length > 0 && (
-                  <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-pop">
+                  <div className="absolute left-0 right-0 top-full z-[35] mt-1 max-h-64 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white shadow-pop">
                     <p className="bg-slate-50 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">
                       Multiple matches — pick one
                     </p>

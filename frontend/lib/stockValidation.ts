@@ -31,6 +31,7 @@ export function checkStock(available: number, requested: number): StockIssue {
 export interface StockValidationLine {
   product: { id: number; stock?: number };
   qty: number;
+  adhoc?: boolean;
 }
 
 export interface InvalidLine<T extends StockValidationLine> {
@@ -49,6 +50,7 @@ export function invalidCartLines<T extends StockValidationLine>(
 ): Array<InvalidLine<T>> {
   const invalid: Array<InvalidLine<T>> = [];
   for (const line of lines) {
+    if (line.adhoc) continue;
     const available = stockOf(line.product.id) ?? line.product.stock ?? 0;
     const issue = checkStock(available, line.qty);
     if (!issue.ok) invalid.push({ line, issue });

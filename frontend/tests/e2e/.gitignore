@@ -1,0 +1,4 @@
+# Test-run artifacts (rewritten on every run) — never commit these.
+*.png
+*.pdf
+*.html

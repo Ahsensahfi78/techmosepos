@@ -39,7 +39,9 @@ def _sale_out(db: Session, s: models.Sale) -> schemas.SaleOut:
                 sku=i.product.sku if i.product else None,
                 barcode=i.product.barcode if i.product else None,
                 model=i.product.model if i.product else None,
-                returned_qty=returned.get(i.product_id, 0),
+                returned_qty=returned.get(i.product_id, 0) if i.product_id else 0,
+                item_type=i.item_type or "STOCK",
+                line_discount=i.line_discount or 0.0,
             )
             for i in s.items
         ],

@@ -7,6 +7,7 @@ import Logo from "./Logo";
 import GlobalSearch from "./GlobalSearch";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
+import { can } from "@/lib/nlp/permissions";
 
 const primaryLinks = [
   { href: "/pos", label: "POS", icon: "🛒" },
@@ -26,7 +27,9 @@ const secondaryLinks = [
   { href: "/expenses", label: "Expenses & Income", icon: "💸", staff: true },
   { href: "/cheques", label: "Cheques", icon: "💳", staff: true },
   { href: "/inventory", label: "Inventory", icon: "🧮", staff: true },
-  { href: "/barcodes", label: "Print Barcode", icon: "🏷️", staff: true },
+  { href: "/branches", label: "Branches", icon: "🏢", staff: true },
+  { href: "/transfers", label: "Transfers", icon: "🔀", staff: true },
+  { href: "/barcodes", label: "Print Barcode", icon: "🏷️", permission: "barcode.print" },
   { href: "/warranty", label: "Warranty", icon: "🛡️" },
   { href: "/repairs", label: "Repairs", icon: "🔧" },
   { href: "/ezcash/history", label: "EZ Cash History", icon: "📋", staff: true },
@@ -76,6 +79,7 @@ export default function Header({
   );
   const visibleSecondary = secondaryLinks.filter((l) => {
     if (l.adminOnly) return isAdmin;
+    if ("permission" in l && l.permission) return can(user?.role, l.permission);
     if (l.staff) return canSeeStaff;
     return true;
   });

@@ -83,6 +83,29 @@ def create_sale(
     sale_items = []
     subtotal = 0.0
     for line in data.items:
+        is_adhoc = line.item_type == "AD_HOC" or line.product_id is None
+        if is_adhoc:
+            if not line.item_name or not line.item_name.strip():
+                raise HTTPException(status_code=400, detail="Ad-hoc item requires a name")
+            if line.price is None or line.price <= 0:
+                raise HTTPException(status_code=400, detail="Ad-hoc item requires a price")
+            price = _round2(line.price)
+            ld = _round2(line.line_discount)
+            line_total = _round2(line.qty * price - ld)
+            subtotal += line_total
+            sale_items.append(
+                models.SaleItem(
+                    product_id=None,
+                    item_type="AD_HOC",
+                    item_name=line.item_name.strip(),
+                    qty=line.qty,
+                    price=price,
+                    line_discount=ld,
+                    line_total=line_total,
+                )
+            )
+            continue
+
         product = _get_product(db, line.product_id)
         if product.stock < line.qty:
             raise HTTPException(
@@ -101,13 +124,16 @@ def create_sale(
             units = _resolve_units(db, product.id, line.imeis)
             line._units = units
         price = _round2(line.price) if line.price is not None else _round2(product.price)
-        line_total = _round2(line.qty * price)
+        ld = _round2(line.line_discount)
+        line_total = _round2(line.qty * price - ld)
         subtotal += line_total
         sale_items.append(
             models.SaleItem(
                 product_id=product.id,
+                item_type="STOCK",
                 qty=line.qty,
                 price=price,
+                line_discount=ld,
                 line_total=line_total,
             )
         )
@@ -159,6 +185,7 @@ def create_sale(
         paid_amount=paid_amount,
         payment_method=payment_method,
         loyalty_points_used=loyalty_points_used,
+        branch_id=getattr(data, 'branch_id', None),
         created_by=user_id,
         items=sale_items,
     )
@@ -166,6 +193,8 @@ def create_sale(
     db.flush()
 
     for item, line in zip(sale.items, data.items):
+        if item.item_type == "AD_HOC" or item.product_id is None:
+            continue
         product = _get_product(db, item.product_id)
         prev = product.stock or 0
         product.stock = prev - item.qty

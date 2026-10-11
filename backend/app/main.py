@@ -15,6 +15,7 @@ from .routers import (
     audit,
     auth,
     backup,
+    branches,
     cheques,
     ezcash,
     finance,
@@ -29,9 +30,19 @@ from .routers import (
     sales,
     settings,
     transactions,
+    transfers,
     users,
     warranty,
 )
+
+
+BRANCH_CREDENTIALS = [
+    {"username": "kalmunai", "branch": "kalmunai", "email": "kalmunai@shoplypos.local", "full_name": "Kalmunai Branch"},
+    {"username": "kaluvanchikuti", "branch": "kaluvanchikuti", "email": "kaluvanchikuti@shoplypos.local", "full_name": "Kaluvanchikuti Branch"},
+    {"username": "batticalo", "branch": "batticalo", "email": "batticalo@shoplypos.local", "full_name": "Batticalo Branch"},
+]
+
+DEFAULT_BRANCH_PASSWORD = "branch123"
 
 
 def _bootstrap_admin() -> None:
@@ -39,15 +50,37 @@ def _bootstrap_admin() -> None:
     try:
         users = UserRepository(db)
         if users.count() > 0:
+            existing = {u.username for u in db.query(models.User).all()}
+            for creds in BRANCH_CREDENTIALS:
+                if creds["username"] not in existing:
+                    users.create(
+                        username=creds["username"],
+                        email=creds["email"],
+                        full_name=creds["full_name"],
+                        hashed_password=hash_password(DEFAULT_BRANCH_PASSWORD),
+                        role=models.Role.CASHIER.value,
+                        branch=creds["branch"],
+                    )
+                    print(f"Created branch user: {creds['username']} / {DEFAULT_BRANCH_PASSWORD}")
             return
         users.create(
             username=os.getenv("ADMIN_USERNAME", "admin"),
-            email=os.getenv("ADMIN_EMAIL", "admin@techmos.local"),
+            email=os.getenv("ADMIN_EMAIL", "admin@shoplypos.local"),
             full_name="Administrator",
             hashed_password=hash_password(os.getenv("ADMIN_PASSWORD", "admin123")),
             role=models.Role.SUPER_ADMIN.value,
         )
         print("Created default admin account: admin / admin123")
+        for creds in BRANCH_CREDENTIALS:
+            users.create(
+                username=creds["username"],
+                email=creds["email"],
+                full_name=creds["full_name"],
+                hashed_password=hash_password(DEFAULT_BRANCH_PASSWORD),
+                role=models.Role.CASHIER.value,
+                branch=creds["branch"],
+            )
+            print(f"Created branch user: {creds['username']} / {DEFAULT_BRANCH_PASSWORD}")
     finally:
         db.close()
 
@@ -95,6 +128,8 @@ app.include_router(repairs.router)
 app.include_router(backup.router)
 app.include_router(transactions.router)
 app.include_router(ezcash.router)
+app.include_router(branches.router)
+app.include_router(transfers.router)
 
 
 @app.get("/")

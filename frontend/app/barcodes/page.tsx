@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/Toast";
+import { can } from "@/lib/nlp/permissions";
 import EmptyState from "@/components/ui/EmptyState";
 import PageHeader from "@/components/ui/PageHeader";
 import BarcodeLabel from "@/components/BarcodeLabel";
@@ -12,21 +14,58 @@ import type { BarcodeItem, BarcodeDisplaySettings, PaperSize } from "@/lib/barco
 import {
   PAPER_SIZES,
   DEFAULT_PAPER,
+  RECOMMENDED_PAPER,
   DEFAULT_DISPLAY_SETTINGS,
   getPaperSize,
   getTotalLabels,
   buildPrintLabels,
+  clampMm,
 } from "@/lib/barcodes";
+import {
+  printLabels,
+  downloadTspl,
+  loadLabelConfig,
+  saveLabelConfig,
+  toLabelConfig,
+  safeAreaFor,
+  pageBoxFor,
+  barcodeMaxHeightMm,
+  DEFAULT_LABEL_CONFIG,
+  LABEL_SIZE_MIN_MM,
+  LABEL_SIZE_MAX_MM,
+  LABEL_GAP_MAX_MM,
+  LABEL_OFFSET_MAX_MM,
+  LABEL_PADDING_MAX_MM,
+  LABEL_ROTATIONS,
+  TSPL_DPI,
+  type LabelConfig,
+  type LabelRotation,
+} from "@/lib/labelPrint";
 import { formatMoney } from "@/lib/constants";
+
+function paperToMm(paper: PaperSize): { widthMm: number; heightMm: number } {
+  const factor = paper.unit === "in" ? 25.4 : 1;
+  return {
+    widthMm: Math.round(paper.width * factor * 100) / 100,
+    heightMm: Math.round(paper.height * factor * 100) / 100,
+  };
+}
 
 export default function BarcodesPage() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const canPrint = user?.role !== "accountant";
+  const canPrint = can(user?.role, "barcode.print");
 
   const [products, setProducts] = useState<Product[]>([]);
   const [items, setItems] = useState<BarcodeItem[]>([]);
-  const [paperId, setPaperId] = useState(DEFAULT_PAPER.id);
+  const [paperId, setPaperId] = useState(RECOMMENDED_PAPER.id);
+  const [customWidth, setCustomWidth] = useState(String(RECOMMENDED_PAPER.width));
+  const [customHeight, setCustomHeight] = useState(String(RECOMMENDED_PAPER.height));
+  const [gapMm, setGapMm] = useState(String(DEFAULT_LABEL_CONFIG.gapMm));
+  const [offsetXMm, setOffsetXMm] = useState(String(DEFAULT_LABEL_CONFIG.offsetXmm));
+  const [offsetYMm, setOffsetYMm] = useState(String(DEFAULT_LABEL_CONFIG.offsetYmm));
+  const [rotation, setRotation] = useState<LabelRotation>(DEFAULT_LABEL_CONFIG.rotate);
+  const [paddingMm, setPaddingMm] = useState(String(DEFAULT_LABEL_CONFIG.paddingMm));
   const [display, setDisplay] = useState<BarcodeDisplaySettings>(DEFAULT_DISPLAY_SETTINGS);
   const [storeName, setStoreName] = useState("My Store");
   const [preview, setPreview] = useState(false);
@@ -39,7 +78,72 @@ export default function BarcodesPage() {
   const barcodeInputBuffer = useRef("");
   const barcodeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const paper: PaperSize = getPaperSize(paperId);
+
+  const paper: PaperSize = useMemo(() => {
+    if (paperId !== "custom") return getPaperSize(paperId);
+    return getPaperSize("custom", {
+      width: clampMm(parseFloat(customWidth), 70),
+      height: clampMm(parseFloat(customHeight), 40),
+    });
+  }, [paperId, customWidth, customHeight]);
+
+  const singleLabel = paper.cols === 1 && paper.rows === 1;
+  const paperUnit = paper.unit === "px" ? "mm" : paper.unit;
+
+  const sizeMm = paperToMm(paper);
+
+  /**
+   * The complete printer geometry. Width/height come from the paper picker;
+   * gap, offset, rotation and the safe-area inset are free-form so a roll
+   * that feeds slightly off-centre can be nudged without changing the size.
+   */
+  const config: LabelConfig = useMemo(
+    () =>
+      toLabelConfig({
+        widthMm: sizeMm.widthMm,
+        heightMm: sizeMm.heightMm,
+        gapMm: parseFloat(gapMm),
+        offsetXmm: parseFloat(offsetXMm),
+        offsetYmm: parseFloat(offsetYMm),
+        rotate: rotation,
+        paddingMm: parseFloat(paddingMm),
+      }),
+    [sizeMm.widthMm, sizeMm.heightMm, gapMm, offsetXMm, offsetYMm, rotation, paddingMm],
+  );
+
+  const safeArea = safeAreaFor(config);
+  const pageBox = pageBoxFor(config);
+
+  // The browser cannot read the printer's real media size, so the whole
+  // geometry is chosen here and persisted (localStorage) for the next visit.
+  const configRestored = useRef(false);
+  const skipConfigSave = useRef(true);
+
+  useEffect(() => {
+    if (configRestored.current) return;
+    configRestored.current = true;
+    const stored = loadLabelConfig();
+    const match = PAPER_SIZES.find((preset) => {
+      const mm = paperToMm(preset);
+      return mm.widthMm === stored.widthMm && mm.heightMm === stored.heightMm;
+    });
+    setCustomWidth(String(stored.widthMm));
+    setCustomHeight(String(stored.heightMm));
+    setPaperId(match ? match.id : "custom");
+    setGapMm(String(stored.gapMm));
+    setOffsetXMm(String(stored.offsetXmm));
+    setOffsetYMm(String(stored.offsetYmm));
+    setRotation(stored.rotate);
+    setPaddingMm(String(stored.paddingMm));
+  }, []);
+
+  useEffect(() => {
+    if (skipConfigSave.current) {
+      skipConfigSave.current = false;
+      return;
+    }
+    saveLabelConfig(config);
+  }, [config]);
 
   const loadProducts = useCallback(async () => {
     try {
@@ -205,7 +309,14 @@ export default function BarcodesPage() {
       return;
     }
     setItems([]);
-    setPaperId(DEFAULT_PAPER.id);
+    setPaperId(RECOMMENDED_PAPER.id);
+    setCustomWidth(String(RECOMMENDED_PAPER.width));
+    setCustomHeight(String(RECOMMENDED_PAPER.height));
+    setGapMm(String(DEFAULT_LABEL_CONFIG.gapMm));
+    setOffsetXMm(String(DEFAULT_LABEL_CONFIG.offsetXmm));
+    setOffsetYMm(String(DEFAULT_LABEL_CONFIG.offsetYmm));
+    setRotation(DEFAULT_LABEL_CONFIG.rotate);
+    setPaddingMm(String(DEFAULT_LABEL_CONFIG.paddingMm));
     setDisplay(DEFAULT_DISPLAY_SETTINGS);
     setPreview(false);
     setConfirmReset(false);
@@ -213,10 +324,137 @@ export default function BarcodesPage() {
   }
 
   function handlePrint() {
-    window.print();
+    // Labels print from their own iframe document with its own @page box, so
+    // the receipt `size: 80mm auto` rule in globals.css never applies to them.
+    // window.print() is never used for labels.
+    if (!document.querySelector("#barcode-print-area .barcode-label")) {
+      toast("Nothing to print — generate a barcode preview first", "error");
+      return;
+    }
+    try {
+      const grid = document.querySelector("#barcode-print-area .barcode-grid");
+      // Sheet stock prints as one grid per sheet; roll stock prints one
+      // page per label (handled inside buildLabelDocument).
+      printLabels(
+        config,
+        (msg) => toast(msg, "error"),
+        singleLabel ? null : grid?.outerHTML ?? null,
+      );
+    } catch {
+      toast("Could not open the print dialog", "error");
+    }
+  }
+
+  function handleTestPrint() {
+    try {
+      printLabels(config, (msg) => toast(msg, "error"));
+    } catch {
+      toast("Could not open the print dialog", "error");
+    }
+  }
+
+  /**
+   * Native TSPL job for printers that speak it (Xprinter XP-365B, TSC, ...).
+   * Sending TSPL to the raw port bypasses the Windows driver, which is the
+   * only way to get the printer's own gap sensing and the exact media box.
+   */
+  function handleTsplDownload() {
+    const payload =
+      items.length > 0
+        ? items.flatMap((item) =>
+            Array.from({ length: item.qty }, () => ({
+              name: item.product.name,
+              barcode: item.product.barcode || item.product.sku || "",
+              price: formatMoney(item.product.price),
+            })),
+          )
+        : [
+            {
+              name: "TEST LABEL - NOT FOR SALE",
+              barcode: "TEST-0001",
+              price: "Rs 0.00",
+            },
+          ];
+
+    try {
+      downloadTspl(payload, config, {
+        dpi: TSPL_DPI,
+        filename: `labels-${config.widthMm}x${config.heightMm}mm.tspl`,
+      });
+      toast(`${payload.length} label${payload.length !== 1 ? "s" : ""} saved as TSPL`, "success");
+    } catch {
+      toast("Could not build the TSPL job", "error");
+    }
   }
 
   const totalLabels = getTotalLabels(items);
+  const labels = buildPrintLabels(items, display, storeName);
+  // A cell is sized by the ROW it sits in, not by the whole sheet. Using
+  // `paper.height * 0.8` made every A4 cell 237mm tall, so 8 labels spilled
+  // over 8 pages instead of tiling one sheet — that was the "8 sheets of
+  // paper" in the print dialog.
+  const cellHeight =
+    (paper.height - (paper.rows - 1) * paper.gapY) / Math.max(1, paper.rows);
+  const gridStyle: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: `repeat(${paper.cols}, 1fr)`,
+    gap: `${paper.gapY}${paperUnit} ${paper.gapX}${paperUnit}`,
+  };
+  const labelCells = labels.map((label, idx) => {
+    // Label stock: the cell IS the label, so it is locked to the paper box
+    // instead of being stretched by a min-height sized for an A4 row. The
+    // padding is the safe-area inset the print stylesheet uses, so what you
+    // see here is what lands between the label edges.
+    const cellStyle: React.CSSProperties = singleLabel
+      ? {
+          boxSizing: "border-box",
+          overflow: "hidden",
+          padding: `${config.paddingMm}mm`,
+          width: `${config.widthMm}mm`,
+          height: `${config.heightMm}mm`,
+          breakInside: "avoid",
+          pageBreakInside: "avoid",
+          border: "1px solid #000",
+          borderRadius: 0,
+          background: "#fff",
+        }
+      : {
+          boxSizing: "border-box",
+          padding: `${paper.paddingY}${paperUnit} ${paper.paddingX}${paperUnit}`,
+          breakInside: "avoid",
+          pageBreakInside: "avoid",
+          border: "1px solid #e2e8f0",
+          borderRadius: "8px",
+          background: "#fff",
+          minHeight: `${Math.max(2, cellHeight * 0.8)}${paperUnit}`,
+        };
+
+    return (
+      <div
+        key={`${label.product.id}-${idx}`}
+        className={singleLabel ? "barcode-cell label" : "barcode-cell"}
+        style={cellStyle}
+      >
+        <BarcodeLabel
+          product={label.product}
+          storeName={label.storeName}
+          settings={label.settings}
+        />
+      </div>
+    );
+  });
+
+  if (!canPrint) {
+    return (
+      <div className="page-container">
+        <EmptyState
+          icon="🔒"
+          title="No access"
+          hint="You don't have permission to print barcodes. Ask a manager or admin."
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="page-container">
@@ -433,7 +671,15 @@ export default function BarcodesPage() {
           </div>
 
           {preview && items.length > 0 && (
-            <div className="card" id="barcode-print-area">
+            <div
+              className="card barcode-preview"
+              id="barcode-print-area"
+              style={
+                {
+                  "--barcode-max-h": `${barcodeMaxHeightMm(config)}mm`,
+                } as React.CSSProperties
+              }
+            >
               <div className="card-header no-print">
                 <h3 className="card-title">Barcode Preview</h3>
                 <span className="badge bg-emerald-100 text-emerald-700">
@@ -441,35 +687,8 @@ export default function BarcodesPage() {
                 </span>
               </div>
 
-              <div
-                className="barcode-grid"
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `repeat(${paper.cols}, 1fr)`,
-                  gap: `${paper.gapY}${paper.unit === "mm" ? "mm" : "in"}`,
-                }}
-              >
-                {buildPrintLabels(items, display, storeName).map((label, idx) => (
-                  <div
-                    key={`${label.product.id}-${idx}`}
-                    className="barcode-cell"
-                    style={{
-                      padding: `${paper.paddingY}${paper.unit === "mm" ? "mm" : "in"} ${paper.paddingX}${paper.unit === "mm" ? "mm" : "in"}`,
-                      breakInside: "avoid",
-                      pageBreakInside: "avoid",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                      background: "#fff",
-                      minHeight: `${paper.height * 0.8}${paper.unit}`,
-                    }}
-                  >
-                    <BarcodeLabel
-                      product={label.product}
-                      storeName={label.storeName}
-                      settings={label.settings}
-                    />
-                  </div>
-                ))}
+              <div className="barcode-grid" style={gridStyle}>
+                {labelCells}
               </div>
             </div>
           )}
@@ -494,6 +713,168 @@ export default function BarcodesPage() {
                   ))}
                 </select>
               </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Label size width (mm)</label>
+                  <input
+                    type="number"
+                    min={LABEL_SIZE_MIN_MM}
+                    max={LABEL_SIZE_MAX_MM}
+                    step={0.5}
+                    value={
+                      paperId === "custom"
+                        ? customWidth
+                        : String(paperToMm(paper).widthMm)
+                    }
+                    onChange={(e) => {
+                      setCustomWidth(e.target.value);
+                      setPaperId("custom");
+                    }}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label">Label size height (mm)</label>
+                  <input
+                    type="number"
+                    min={LABEL_SIZE_MIN_MM}
+                    max={LABEL_SIZE_MAX_MM}
+                    step={0.5}
+                    value={
+                      paperId === "custom"
+                        ? customHeight
+                        : String(paperToMm(paper).heightMm)
+                    }
+                    onChange={(e) => {
+                      setCustomHeight(e.target.value);
+                      setPaperId("custom");
+                    }}
+                    className="input"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Gap between labels (mm)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={LABEL_GAP_MAX_MM}
+                    step={0.5}
+                    value={gapMm}
+                    onChange={(e) => setGapMm(e.target.value)}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label">Safe area inset (mm)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={LABEL_PADDING_MAX_MM}
+                    step={0.5}
+                    value={paddingMm}
+                    onChange={(e) => setPaddingMm(e.target.value)}
+                    className="input"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Offset X (mm)</label>
+                  <input
+                    type="number"
+                    min={-LABEL_OFFSET_MAX_MM}
+                    max={LABEL_OFFSET_MAX_MM}
+                    step={0.5}
+                    value={offsetXMm}
+                    onChange={(e) => setOffsetXMm(e.target.value)}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label">Offset Y (mm)</label>
+                  <input
+                    type="number"
+                    min={-LABEL_OFFSET_MAX_MM}
+                    max={LABEL_OFFSET_MAX_MM}
+                    step={0.5}
+                    value={offsetYMm}
+                    onChange={(e) => setOffsetYMm(e.target.value)}
+                    className="input"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Rotation</label>
+                <select
+                  value={String(rotation)}
+                  onChange={(e) => setRotation(Number(e.target.value) as LabelRotation)}
+                  className="select"
+                >
+                  {LABEL_ROTATIONS.map((deg) => (
+                    <option key={deg} value={String(deg)}>
+                      {deg}°{deg === 90 || deg === 270 ? " (turns the page sideways)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="label">Geometry</label>
+                <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <p>
+                    Media: <strong>{config.widthMm} x {config.heightMm} mm</strong>
+                    {singleLabel ? " · one label per page" : ` · ${paper.cols} x ${paper.rows} grid`}
+                  </p>
+                  <p>
+                    Safe area: <strong>{safeArea.widthMm} x {safeArea.heightMm} mm</strong>
+                  </p>
+                  <p>
+                    Barcode capped at {barcodeMaxHeightMm(config)} mm · {TSPL_DPI} dpi
+                    {" = "}
+                    {Math.round(pageBox.widthMm * TSPL_DPI / 25.4)} x {Math.round(pageBox.heightMm * TSPL_DPI / 25.4)} dots
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleTestPrint}
+                className="btn btn-secondary btn-sm w-full"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 4h12v4l-2 2v3l2 2v3H6v-3l2-2V10L6 8V4z" />
+                </svg>
+                Test Print
+              </button>
+              <p className="hint">
+                Prints one {config.widthMm} x {config.heightMm} mm sample label.
+                The solid box is the safe area; the dashed box is the label edge.
+                If content touches the dashed line, increase the inset. Nothing
+                is written to the database.
+              </p>
+
+              <button
+                type="button"
+                onClick={handleTsplDownload}
+                className="btn btn-secondary btn-sm w-full"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l4-4m-4 4l-4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+                </svg>
+                Download TSPL
+              </button>
+              <p className="hint">
+                Native job for TSPL printers (Xprinter XP-365B, TSC). Send it to
+                the raw port to skip the Windows driver entirely — that is the
+                only way to get the printer's own gap sensing and the exact
+                {config.widthMm} x {config.heightMm} mm box.
+              </p>
 
               <div className="border-t border-slate-100 pt-4">
                 <h4 className="mb-3 text-sm font-semibold text-slate-700">
@@ -552,8 +933,6 @@ export default function BarcodesPage() {
           </div>
         </div>
       </div>
-
-      <div id="barcode-print-portal" className="hidden" />
     </div>
   );
 }

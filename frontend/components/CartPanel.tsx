@@ -18,6 +18,8 @@ export interface CartLine {
   unitPrice?: number;
   /** Optional line-level discount (Rs). */
   lineDiscount?: number;
+  /** True for ad-hoc / one-time items not in the product catalog. */
+  adhoc?: boolean;
 }
 
 export function lineUnitPrice(l: CartLine): number {
@@ -61,6 +63,8 @@ interface CartPanelProps {
   onSetToAvailable?: (id: number) => void;
   /** Remove a line from the cart entirely. */
   onRemoveLine?: (id: number) => void;
+  /** Customer chip rendered at the top of the order panel. */
+  customerChip?: ReactNode;
 }
 
 const QUICK_ADDS = [1, 5, 10, 20];
@@ -87,6 +91,7 @@ export default function CartPanel({
   onSetToAvailable,
   onRemoveLine,
   summary,
+  customerChip,
 }: CartPanelProps) {
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   return (
@@ -113,6 +118,12 @@ export default function CartPanel({
         </div>
       </div>
 
+      {customerChip && (
+        <div className="mt-3 shrink-0" data-testid="customer-chip">
+          {customerChip}
+        </div>
+      )}
+
       {itemCount > 0 && (
         <p className="mt-2 shrink-0 text-xs font-medium text-slate-400">
           {itemCount} item{itemCount > 1 ? "s" : ""}
@@ -135,27 +146,35 @@ export default function CartPanel({
           const unit = lineUnitPrice(l);
           const overridden = l.unitPrice !== undefined && l.unitPrice !== l.product.price;
           const lineDisc = l.lineDiscount ?? 0;
-          const avail = stockById?.[l.product.id] ?? l.product.stock;
-          const check = checkStock(avail, l.qty);
-          const over = !check.ok;
+          const isAdhoc = !!l.adhoc;
+          const avail = isAdhoc ? Infinity : (stockById?.[l.product.id] ?? l.product.stock);
+          const check = isAdhoc ? { ok: true, out: false, over: false, available: Infinity, requested: l.qty } : checkStock(avail, l.qty);
+          const over = !isAdhoc && !check.ok;
           const isCollapsed = collapsed[l.product.id];
           return (
             <div
               key={l.product.id}
-              className={`rounded-xl bg-slate-50 px-3 py-2.5 ${
-                over
-                  ? check.out
-                    ? "ring-1 ring-red-300"
-                    : "ring-1 ring-amber-300"
-                  : ""
+              className={`rounded-xl px-3 py-2.5 ${
+                isAdhoc
+                  ? "bg-violet-50 ring-1 ring-violet-200"
+                  : over
+                    ? check.out
+                      ? "bg-slate-50 ring-1 ring-red-300"
+                      : "bg-slate-50 ring-1 ring-amber-300"
+                    : "bg-slate-50"
               }`}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">
                     {l.product.name}
+                    {isAdhoc && (
+                      <span className="ml-1.5 inline-block rounded bg-violet-200 px-1.5 py-0.5 text-[9px] font-bold uppercase text-violet-700">
+                        AD-HOC
+                      </span>
+                    )}
                   </p>
-                  {(l.product.sku || l.product.barcode) && (
+                  {!isAdhoc && (l.product.sku || l.product.barcode) && (
                     <p className="truncate font-mono text-[10px] text-slate-400">
                       {l.product.sku ?? ""}
                       {l.product.sku && l.product.barcode ? " · " : ""}
@@ -202,7 +221,7 @@ export default function CartPanel({
                   )}
                   <button
                     onClick={() => onAdd(l.product.id)}
-                    disabled={l.qty >= avail}
+                    disabled={!isAdhoc && l.qty >= avail}
                     aria-label="Increase quantity"
                     className="grid h-8 w-8 place-items-center rounded-lg bg-white text-sm font-bold text-emerald-600 shadow-sm ring-1 ring-slate-200 active:scale-90 disabled:opacity-40"
                   >

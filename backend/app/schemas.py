@@ -66,6 +66,7 @@ class UserBase(BaseModel):
     email: EmailStr
     full_name: str = Field(min_length=2, max_length=100)
     role: str = "cashier"
+    branch: Optional[str] = None
 
     @field_validator("role")
     @classmethod
@@ -86,6 +87,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     full_name: Optional[str] = Field(default=None, min_length=2, max_length=100)
     role: Optional[str] = None
+    branch: Optional[str] = None
     password: Optional[str] = Field(default=None, min_length=8, max_length=128)
     is_active: Optional[bool] = None
     expires_at: Optional[datetime] = None
@@ -104,6 +106,7 @@ class UserOut(BaseModel):
     email: str
     full_name: str
     role: str
+    branch: Optional[str] = None
     is_active: bool
     expires_at: Optional[datetime] = None
     created_at: datetime
@@ -236,6 +239,7 @@ class CustomerBase(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     email: Optional[EmailStr] = None
     address: Optional[str] = None
+    notes: Optional[str] = Field(default=None, max_length=2000)
     credit_limit: float = Field(default=0.0, ge=0)
 
 
@@ -248,6 +252,7 @@ class CustomerUpdate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     email: Optional[EmailStr] = None
     address: Optional[str] = None
+    notes: Optional[str] = Field(default=None, max_length=2000)
     credit_limit: Optional[float] = Field(default=None, ge=0)
     is_active: Optional[bool] = None
 
@@ -358,7 +363,11 @@ class ProductBase(BaseModel):
 
 
 class ProductCreate(ProductBase):
-    pass
+    auto_generate: bool = False
+
+
+class ProductCodeOut(BaseModel):
+    code: str
 
 
 class ProductUpdate(BaseModel):
@@ -397,10 +406,13 @@ class PaginatedProducts(BaseModel):
 
 # ── Sale ────────────────────────────────────────────────────────────────
 class SaleItemIn(BaseModel):
-    product_id: int
+    product_id: Optional[int] = None
     qty: int = Field(default=1, ge=1)
     price: Optional[float] = Field(default=None, ge=0)
     imeis: List[str] = Field(default=[])
+    item_type: str = Field(default="STOCK")
+    item_name: Optional[str] = None
+    line_discount: float = Field(default=0.0, ge=0)
 
 
 class SaleIn(BaseModel):
@@ -412,10 +424,11 @@ class SaleIn(BaseModel):
     paid_amount: Optional[float] = Field(default=None, ge=0)
     loyalty_points_used: int = Field(default=0, ge=0)
     payments: Optional[List["SalePaymentIn"]] = None
+    branch_id: Optional[int] = None
 
 
 class SaleItemOut(BaseModel):
-    product_id: int
+    product_id: Optional[int] = None
     product_name: str
     qty: int
     price: float
@@ -425,6 +438,8 @@ class SaleItemOut(BaseModel):
     barcode: Optional[str] = None
     model: Optional[str] = None
     returned_qty: int = 0
+    item_type: str = "STOCK"
+    line_discount: float = 0.0
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -561,6 +576,7 @@ class PurchaseOrderIn(BaseModel):
     tax_amount: float = Field(default=0.0, ge=0)
     notes: Optional[str] = None
     items: List[PurchaseOrderItemIn] = Field(min_length=1)
+    branch_id: Optional[int] = None
 
 
 class PurchaseOrderItemOut(BaseModel):
@@ -1152,3 +1168,88 @@ class EzCashCashierSummary(BaseModel):
     successful: int
     failed: int
     total_amount: float
+
+
+# ── Branch & Multi-Branch Inventory ─────────────────────────────────────
+class BranchCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    code: str = Field(min_length=1, max_length=20)
+    location: Optional[str] = None
+    is_active: bool = True
+
+
+class BranchUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    code: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    location: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class BranchOut(BaseModel):
+    id: int
+    name: str
+    code: str
+    location: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BranchStockOut(BaseModel):
+    id: int
+    branch_id: int
+    branch_name: str
+    product_id: int
+    product_name: str
+    quantity: int
+    updated_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StockTransferItemIn(BaseModel):
+    product_id: int
+    quantity: int = Field(gt=0)
+
+
+class StockTransferIn(BaseModel):
+    from_branch_id: int
+    to_branch_id: int
+    notes: Optional[str] = None
+    items: List[StockTransferItemIn] = Field(min_length=1)
+
+    @field_validator("to_branch_id")
+    @classmethod
+    def different_branches(cls, v: int, info) -> int:
+        if "from_branch_id" in info.data and v == info.data["from_branch_id"]:
+            raise ValueError("Source and destination branches must be different")
+        return v
+
+
+class StockTransferItemOut(BaseModel):
+    id: int
+    product_id: int
+    product_name: str
+    quantity: int
+    from_quantity: Optional[int] = None
+    to_quantity: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StockTransferOut(BaseModel):
+    id: int
+    transfer_number: str
+    from_branch_id: int
+    from_branch_name: str
+    to_branch_id: int
+    to_branch_name: str
+    status: str
+    notes: Optional[str] = None
+    created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
+    created_at: datetime
+    approved_by: Optional[int] = None
+    approved_at: Optional[datetime] = None
+    completed_by: Optional[int] = None
+    completed_at: Optional[datetime] = None
+    items: List[StockTransferItemOut] = []
+    model_config = ConfigDict(from_attributes=True)

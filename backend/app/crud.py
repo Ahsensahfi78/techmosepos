@@ -1,8 +1,10 @@
 from fastapi import HTTPException
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import models, schemas
+from .services import product_code_service
 
 
 def get_product(db: Session, product_id: int) -> models.Product:
@@ -33,20 +35,69 @@ def get_products(
 
 
 def create_product(db: Session, data: schemas.ProductCreate) -> models.Product:
-    product = models.Product(**data.model_dump())
-    db.add(product)
-    db.commit()
-    db.refresh(product)
-    return product
+    payload = data.model_dump(exclude={"auto_generate"})
+    sku = (payload.get("sku") or "").strip() or None
+    barcode = (payload.get("barcode") or "").strip() or None
+
+    if sku is None:
+        sku = product_code_service.next_product_code(db)
+    elif data.auto_generate and product_code_service.find_code_conflict(db, sku) is not None:
+        # Displayed code was taken between generation and save (offline queue
+        # or a concurrent user) — issue a fresh one instead of failing.
+        sku = product_code_service.next_product_code(db)
+    if barcode is None:
+        barcode = sku
+
+    product_code_service.validate_product_codes(db, sku=sku, barcode=barcode)
+
+    payload["sku"] = sku
+    payload["barcode"] = barcode
+
+    for attempt in range(3):
+        product = models.Product(**payload)
+        db.add(product)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            if not data.auto_generate:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Product code or barcode already exists. Choose different values.",
+                )
+            payload["sku"] = product_code_service.next_product_code(db)
+            payload["barcode"] = payload["sku"]
+            continue
+        db.refresh(product)
+        return product
+    raise HTTPException(status_code=400, detail="Could not create a unique product code")
 
 
 def update_product(
     db: Session, product_id: int, data: schemas.ProductUpdate
 ) -> models.Product:
     product = get_product(db, product_id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if "sku" in payload:
+        payload["sku"] = (payload.get("sku") or "").strip() or None
+    if "barcode" in payload:
+        payload["barcode"] = (payload.get("barcode") or "").strip() or None
+    product_code_service.validate_product_codes(
+        db,
+        sku=payload.get("sku"),
+        barcode=payload.get("barcode"),
+        exclude_id=product_id,
+    )
+    for field, value in payload.items():
         setattr(product, field, value)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Product code or barcode already exists. Choose different values.",
+        )
     db.refresh(product)
     return product
 

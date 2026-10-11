@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "vitest run"
+    "test": "vitest run --no-file-parallelism",
+    "test:e2e": "node tests/e2e/testPrint.mjs",
+    "test:e2e:receipt": "node tests/e2e/receiptSmoke.mjs && node tests/e2e/receiptPrint.mjs",
+    "test:e2e:customer": "node tests/e2e/customerPicker.mjs"
   },
   "dependencies": {
     "jsbarcode": "^3.12.3",
@@ -23,6 +26,7 @@
     "autoprefixer": "^10.4.19",
     "jsdom": "^29.1.1",
     "postcss": "^8.4.39",
+    "puppeteer-core": "^25.12.0",
     "tailwindcss": "^3.4.6",
     "typescript": "^5.5.3",
     "vitest": "^4.1.10"

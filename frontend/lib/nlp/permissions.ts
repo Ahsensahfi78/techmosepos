@@ -41,6 +41,11 @@ export const ALL_PERMISSIONS = [
   "repair.view",
   "backup.manage",
   "export.view",
+  "barcode.print",
+  "branch.manage",
+  "branch.view",
+  "transfer.manage",
+  "transfer.view",
 ] as const;
 
 const MANAGER_EXCLUDED = new Set(["user.manage", "settings.manage", "audit.view", "backup.manage"]);
@@ -68,6 +73,9 @@ const ACCOUNTANT_PERMISSIONS = new Set<string>([
   "warranty.view",
   "repair.view",
   "export.view",
+  "barcode.print",
+  "branch.view",
+  "transfer.view",
 ]);
 
 const CASHIER_PERMISSIONS = new Set<string>([
@@ -82,6 +90,10 @@ const CASHIER_PERMISSIONS = new Set<string>([
   "warehouse.view",
   "warranty.view",
   "repair.view",
+  "ezcash.view",
+  "ezcash.create",
+  "barcode.print",
+  "branch.view",
 ]);
 
 export const ROLE_PERMISSIONS: Record<string, ReadonlySet<string>> = {
@@ -115,6 +127,8 @@ const PAGE_PERMISSIONS: Record<string, string> = {
   income: "income.view",
   cheques: "cheque.manage",
   warranty: "warranty.view",
+  branches: "branch.view",
+  transfers: "transfer.view",
 };
 
 const ASK_PERMISSIONS: Record<string, string> = {

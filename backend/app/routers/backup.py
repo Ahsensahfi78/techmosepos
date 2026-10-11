@@ -5,12 +5,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import engine, get_db
 from ..permissions import require_permission
 from ..repositories.audit_repo import AuditLogRepository
+from ..services import product_code_service
 
 router = APIRouter(prefix="/backup", tags=["backup"])
 
@@ -177,20 +179,37 @@ async def import_products_csv(
         raise HTTPException(status_code=400, detail="CSV must include a 'name' column")
     created = 0
     updated = 0
-    for line in reader:
+    for row_num, line in enumerate(reader, start=2):
         name = (line.get("name") or "").strip()
         if not name:
             continue
         product = db.query(models.Product).filter(models.Product.name == name).first()
-        if product is None:
+        is_new = product is None
+        if is_new:
             product = models.Product(name=name)
             db.add(product)
             created += 1
         else:
             updated += 1
+        sku = (line.get("sku") or "").strip() or None
+        barcode = (line.get("barcode") or "").strip() or None
+        if is_new and sku is None:
+            sku = product_code_service.next_product_code(db, commit=False)
+            if barcode is None:
+                barcode = sku
+        db.flush()
         try:
-            product.sku = line.get("sku") or product.sku
-            product.barcode = line.get("barcode") or product.barcode
+            product_code_service.validate_product_codes(
+                db, sku=sku, barcode=barcode, exclude_id=product.id
+            )
+        except HTTPException as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=400, detail=f"Row {row_num}: {exc.detail}"
+            )
+        try:
+            product.sku = sku or product.sku
+            product.barcode = barcode or product.barcode
             product.category = line.get("category") or product.category
             product.model = line.get("model") or product.model
             product.price = float(line.get("price") or 0 or product.price or 0)
@@ -212,7 +231,14 @@ async def import_products_csv(
             raise HTTPException(
                 status_code=400, detail=f"Bad numeric value in row for '{name}'"
             )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Import contains a duplicate product code or barcode",
+        )
     AuditLogRepository(db).log(
         action="backup.import_products",
         entity_type="product",

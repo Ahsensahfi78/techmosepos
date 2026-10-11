@@ -5,14 +5,22 @@ import { useRouter } from "next/navigation";
 import Logo from "@/components/Logo";
 import { useAuth } from "@/lib/auth-context";
 
+const BRANCHES = [
+  { value: "kalmunai", label: "Kalmunai" },
+  { value: "kaluvanchikuti", label: "Kaluvanchikuti" },
+  { value: "batticalo", label: "Batticalo" },
+];
+
 interface Field {
   username: string;
   password: string;
+  branch: string;
 }
 
 const emptyField: Field = {
   username: "",
   password: "",
+  branch: BRANCHES[0].value,
 };
 
 export default function LoginPage() {
@@ -41,6 +49,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await login(field.username.trim(), field.password);
+      localStorage.setItem("pos_branch", field.branch);
       router.replace(nextPath());
     } catch (err) {
       setError(
@@ -66,13 +75,30 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-5 p-6">
             <div>
+              <label className="label">Branch</label>
+              <select
+                value={field.branch}
+                onChange={(e) =>
+                  setField((f) => ({ ...f, branch: e.target.value }))
+                }
+                className="input"
+              >
+                {BRANCHES.map((b) => (
+                  <option key={b.value} value={b.value}>
+                    {b.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
               <label className="label">Username</label>
               <input
                 value={field.username}
                 onChange={(e) =>
                   setField((f) => ({ ...f, username: e.target.value }))
                 }
-                placeholder="admin"
+                placeholder="Enter username"
                 autoComplete="username"
                 autoFocus
                 className="input"
@@ -108,13 +134,6 @@ export default function LoginPage() {
             </button>
           </form>
         </div>
-
-        <p className="mt-5 text-center text-xs text-slate-400">
-          Demo sign-in&nbsp;
-          <span className="font-semibold text-slate-500">admin</span>
-          {" / "}
-          <span className="font-semibold text-slate-500">admin123</span>
-        </p>
       </div>
     </div>
   );

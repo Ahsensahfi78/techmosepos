@@ -6,6 +6,8 @@ import {
 } from "./auth";
 import type {
   AuditLog,
+  Branch,
+  BranchStock,
   Cheque,
   ChequeInput,
   Customer,
@@ -26,6 +28,7 @@ import type {
   PartyPaymentInput,
   PaymentRecord,
   Product,
+  ProductCreateInput,
   ProductUnit,
   Purchase,
   PurchaseOrder,
@@ -49,6 +52,8 @@ import type {
   StockAdjustment,
   StockAdjustmentInput,
   StockReport,
+  StockTransfer,
+  StockTransferItem,
   Supplier,
   SupplierReport,
   AnalyticsReport,
@@ -253,7 +258,8 @@ export const api = {
   },
   products: {
     list: () => request<Product[]>("/products"),
-    create: (data: Omit<Product, "id">) =>
+    nextCode: () => request<{ code: string }>("/products/next-code"),
+    create: (data: ProductCreateInput) =>
       request<Product>("/products", {
         method: "POST",
         body: JSON.stringify(data),
@@ -711,6 +717,37 @@ export const api = {
       ),
     productSummary: (id: number) =>
       request<ProductHistorySummary>(`/transactions/products/${id}/summary`),
+  },
+  branches: {
+    list: (active_only?: boolean) =>
+      request<Branch[]>(`/branches${active_only ? "?active_only=true" : ""}`),
+    get: (id: number) => request<Branch>(`/branches/${id}`),
+    create: (data: { name: string; code: string; location?: string }) =>
+      request<Branch>("/branches", { method: "POST", body: JSON.stringify(data) }),
+    update: (id: number, data: Partial<Branch>) =>
+      request<Branch>(`/branches/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    stocks: (branchId: number) =>
+      request<BranchStock[]>(`/branches/${branchId}/stocks`),
+    productStocks: (productId: number) =>
+      request<BranchStock[]>(`/branches/product/${productId}/stocks`),
+  },
+  transfers: {
+    list: (params: { status?: string; branch_id?: number } = {}) =>
+      request<StockTransfer[]>(`/transfers?${toQueryString(params)}`),
+    get: (id: number) => request<StockTransfer>(`/transfers/${id}`),
+    create: (data: {
+      from_branch_id: number;
+      to_branch_id: number;
+      notes?: string;
+      items: { product_id: number; quantity: number }[];
+    }) =>
+      request<StockTransfer>("/transfers", { method: "POST", body: JSON.stringify(data) }),
+    approve: (id: number) =>
+      request<StockTransfer>(`/transfers/${id}/approve`, { method: "POST" }),
+    complete: (id: number) =>
+      request<StockTransfer>(`/transfers/${id}/complete`, { method: "POST" }),
+    cancel: (id: number) =>
+      request<StockTransfer>(`/transfers/${id}/cancel`, { method: "POST" }),
   },
 };
 

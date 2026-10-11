@@ -1,10 +1,13 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { formatMoney } from "@/lib/constants";
 import Modal from "./ui/Modal";
-import { lineUnitPrice, lineTotal, type CartLine } from "./CartPanel";
+import type { CartLine } from "./CartPanel";
 import type { SplitLine } from "./CheckoutModal";
+import ReceiptPaper from "./ReceiptPaper";
+import { applyReceiptRotation, fitReceiptPage } from "@/lib/receiptTheme";
+import type { ReceiptBrand } from "@/lib/types";
 
 interface ReceiptModalProps {
   open: boolean;
@@ -23,20 +26,10 @@ interface ReceiptModalProps {
   offline?: boolean;
   customer: string | null;
   cashier?: string | null;
-  /** Custom footer text from store settings (line breaks preserved). */
-  receiptFooter?: string;
+  /** Shop name, address, phone, email, logo, footer and roll width from settings. */
+  brand?: ReceiptBrand;
   onClose: () => void;
 }
-
-const DEFAULT_RECEIPT_FOOTER =
-  "Thank you for your purchase!\nReturn policy: Items eligible for return within 3 days with receipt.";
-
-const methodLabel: Record<string, string> = {
-  cash: "Cash",
-  card: "Card",
-  cheque: "Cheque",
-  bank: "Bank transfer",
-};
 
 export default function ReceiptModal({
   open,
@@ -55,140 +48,48 @@ export default function ReceiptModal({
   offline,
   customer,
   cashier,
-  receiptFooter,
+  brand,
   onClose,
 }: ReceiptModalProps) {
-  const now = new Date();
-  const methodName = methodLabel[method] ?? method;
-  const payLines = payments && payments.length > 0 ? payments : null;
-  const footerText =
-    receiptFooter && receiptFooter.trim() ? receiptFooter : DEFAULT_RECEIPT_FOOTER;
-  const footerLines = footerText.split("\n");
-
   const receiptBody = (
-    <div className="receipt">
-      <div className="r-head">
-        <p className="r-title">TechMOS</p>
-        <p className="r-sub">Mobile Shop POS System</p>
-      </div>
-      <div className="r-divider" />
-      <p className="r-line">
-        <span>Receipt</span>
-        <span>#{saleId}</span>
-      </p>
-      <p className="r-line">
-        <span>Date</span>
-        <span>
-          {now.toLocaleDateString()} {now.toLocaleTimeString()}
-        </span>
-      </p>
-      {cashier && (
-        <p className="r-line">
-          <span>Cashier</span>
-          <span>{cashier}</span>
-        </p>
-      )}
-      {customer && (
-        <p className="r-line">
-          <span>Customer</span>
-          <span>{customer}</span>
-        </p>
-      )}
-      <div className="r-divider" />
-      <div className="r-col r-th">
-        <span className="r-name">ITEM</span>
-        <span className="r-qty">QTY</span>
-        <span className="r-amt">TOTAL</span>
-      </div>
-      {lines.map((l) => {
-        const unit = lineUnitPrice(l);
-        const disc = l.lineDiscount ?? 0;
-        const codeParts: string[] = [];
-        if (l.product.sku) codeParts.push(l.product.sku);
-        if (l.product.barcode) codeParts.push(l.product.barcode);
-        const code = codeParts.join(" · ");
-        return (
-          <div key={l.product.id} className="r-item">
-            <div className="r-col">
-              <span className="r-name">
-                <span className="n">{l.product.name}</span>
-                {code && <span className="r-code">{code}</span>}
-              </span>
-              <span className="r-qty">{l.qty}</span>
-              <span className="r-amt">{formatMoney(lineTotal(l))}</span>
-            </div>
-            <p className="r-unit">
-              @ {formatMoney(unit)} each
-              {disc > 0 ? ` · −${formatMoney(disc)}` : ""}
-            </p>
-          </div>
-        );
-      })}
-      <div className="r-divider" />
-      <p className="r-row">
-        <span>Subtotal</span>
-        <span>{formatMoney(subtotal)}</span>
-      </p>
-      {discount > 0 && (
-        <p className="r-row">
-          <span>Discount</span>
-          <span>-{formatMoney(discount)}</span>
-        </p>
-      )}
-      {tax > 0 && (
-        <p className="r-row">
-          <span>Tax</span>
-          <span>+{formatMoney(tax)}</span>
-        </p>
-      )}
-      {pointsUsed > 0 && (
-        <p className="r-row">
-          <span>Loyalty</span>
-          <span>-{formatMoney(pointsUsed)}</span>
-        </p>
-      )}
-      <p className="r-row r-total">
-        <span>TOTAL</span>
-        <span>{formatMoney(total)}</span>
-      </p>
-      {payLines ? (
-        <>
-          <p className="r-row">
-            <span>Paid (split)</span>
-            <span>{formatMoney(paid)}</span>
-          </p>
-          {payLines.map((p, i) => (
-            <p key={i} className="r-row r-subrow">
-              <span>· {methodLabel[p.method] ?? p.method}</span>
-              <span>{formatMoney(p.amount)}</span>
-            </p>
-          ))}
-        </>
-      ) : (
-        <p className="r-row">
-          <span>Paid ({methodName})</span>
-          <span>{formatMoney(paid)}</span>
-        </p>
-      )}
-      {due > 0 ? (
-        <p className="r-row r-due">
-          <span>Due</span>
-          <span>{formatMoney(due)}</span>
-        </p>
-      ) : (
-        <p className="r-row">
-          <span>Change</span>
-          <span>{formatMoney(change)}</span>
-        </p>
-      )}
-      <div className="r-divider" />
-      <div className="r-foot">
-        {footerLines.map((line, i) => (
-          <p key={i}>{line || "\u00A0"}</p>
-        ))}
-      </div>
-    </div>
+    <ReceiptPaper
+      brand={brand ?? {}}
+      meta={{ saleId, date: new Date(), cashier, customer, offline }}
+      lines={lines}
+      totals={{
+        subtotal,
+        discount,
+        tax,
+        pointsUsed,
+        total,
+        paid,
+        due,
+        change,
+        method,
+        payments,
+      }}
+    />
   );
+
+  const previewRef = useRef<HTMLDivElement>(null);
+
+  // Publish the 180° correction while the modal is open so a print from here
+  // uses the saved orientation. The rule only applies inside @media print, so
+  // the preview above stays upright either way.
+  useEffect(() => {
+    if (!open) return;
+    applyReceiptRotation(brand?.receipt_rotate_180);
+  }, [open, brand?.receipt_rotate_180]);
+
+  function handlePrint() {
+    document.getElementById("barcode-dynamic-page")?.remove();
+    // Chrome cannot express `size: <width> auto`, so the page box has to be
+    // measured from the preview that is actually on screen. Without this the
+    // receipt falls back to the paper size the browser last used.
+    applyReceiptRotation(brand?.receipt_rotate_180);
+    fitReceiptPage(previewRef.current, brand?.receipt_width_mm);
+    window.print();
+  }
 
   return (
     <>
@@ -199,10 +100,7 @@ export default function ReceiptModal({
         maxWidth="max-w-md"
         footer={
           <div className="grid w-full grid-cols-2 gap-2">
-            <button
-              onClick={() => window.print()}
-              className="btn btn-primary"
-            >
+            <button onClick={handlePrint} className="btn btn-primary">
               🖨 Print receipt
             </button>
             <button
@@ -237,7 +135,9 @@ export default function ReceiptModal({
         </div>
 
         <div className="mt-4">
-          <div className="receipt-preview">{receiptBody}</div>
+          <div className="receipt-preview" ref={previewRef}>
+            {receiptBody}
+          </div>
         </div>
       </Modal>
 

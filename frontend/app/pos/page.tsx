@@ -15,6 +15,10 @@ import CartPanel, { type CartLine, lineSubtotal } from "@/components/CartPanel";
 import CheckoutModal, { type SplitLine } from "@/components/CheckoutModal";
 import EzCashReloadModal from "@/components/EzCashReloadModal";
 import ReceiptModal from "@/components/ReceiptModal";
+import CustomerCombobox, {
+  type CustomerComboboxHandle,
+} from "@/components/CustomerCombobox";
+import { applyReceiptWidth } from "@/lib/receiptTheme";
 import { smartSearch, bestMatch, type ProductMatch } from "@/lib/search";
 import {
   can,
@@ -74,7 +78,7 @@ const SHORTCUTS: { key: string; label: string }[] = [
   { key: "F1 / ?", label: "Keyboard shortcuts help" },
   { key: "F2", label: "Search products (name / SKU / barcode)" },
   { key: "F3", label: "Scan barcode / SKU" },
-  { key: "F4", label: "Select customer" },
+  { key: "F4 / Ctrl + K", label: "Select customer" },
   { key: "F6", label: "Hold current invoice" },
   { key: "F7", label: "Held / parked invoices" },
   { key: "F8", label: "Charge & checkout" },
@@ -107,11 +111,17 @@ export default function PosPage() {
   const [busy, setBusy] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [ezCashOpen, setEzCashOpen] = useState(false);
+  const [adhocOpen, setAdhocOpen] = useState(false);
+  const [adhocName, setAdhocName] = useState("");
+  const [adhocQty, setAdhocQty] = useState(1);
+  const [adhocPrice, setAdhocPrice] = useState(0);
+  const [adhocDiscount, setAdhocDiscount] = useState(0);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef<HTMLInputElement>(null);
-  const customerSelectRef = useRef<HTMLSelectElement>(null);
+  const customerPickerRef = useRef<CustomerComboboxHandle>(null);
   const submittingRef = useRef(false);
+  const adhocCounterRef = useRef(1);
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -224,7 +234,9 @@ export default function PosPage() {
     api.settings
       .print()
       .then((s) => {
-        if (!cancelled) setPrintSettings(s);
+        if (cancelled) return;
+        setPrintSettings(s);
+        applyReceiptWidth(s.receipt_width_mm);
       })
       .catch(() => {
         /* print settings are optional — fall back to defaults */
@@ -287,10 +299,17 @@ export default function PosPage() {
 
   useEffect(() => {
     master.customers
-      .list({ page_size: 100 })
+      .list({ page_size: 200 })
       .then((res) => setCustomers(res.items))
       .catch(() => {});
   }, []);
+
+  /** Insert a freshly created customer so it is selectable without a reload. */
+  function addCustomerToList(c: Customer) {
+    setCustomers((prev) =>
+      prev.some((x) => x.id === c.id) ? prev : [...prev, c]
+    );
+  }
 
   const categories = useMemo(
     () => ["All", ...Array.from(new Set(products.map((p) => p.category)))],
@@ -409,6 +428,41 @@ export default function PosPage() {
 
   function addToCart(product: Product) {
     addToCartQty(product, 1);
+  }
+
+  function addAdhocToCart() {
+    if (!adhocName.trim()) {
+      toast("Item name is required", "error");
+      return;
+    }
+    if (adhocQty < 1) {
+      toast("Quantity must be at least 1", "error");
+      return;
+    }
+    if (adhocPrice <= 0) {
+      toast("Price must be greater than zero", "error");
+      return;
+    }
+    const id = -adhocCounterRef.current;
+    adhocCounterRef.current++;
+    const line: CartLine = {
+      product: {
+        id,
+        name: adhocName.trim(),
+        price: adhocPrice,
+        stock: Infinity,
+      },
+      qty: adhocQty,
+      adhoc: true,
+      lineDiscount: adhocDiscount || undefined,
+    };
+    setCart((prev) => [...prev, line]);
+    setAdhocOpen(false);
+    setAdhocName("");
+    setAdhocQty(1);
+    setAdhocPrice(0);
+    setAdhocDiscount(0);
+    toast(`Added "${line.product.name}" to cart`, "success");
   }
 
   function handleScan(value: string) {
@@ -1039,6 +1093,12 @@ export default function PosPage() {
         target.tagName === "SELECT" ||
         target.tagName === "TEXTAREA";
 
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        customerPickerRef.current?.open();
+        return;
+      }
+
       if (e.key === "/" && !inInput) {
         e.preventDefault();
         searchRef.current?.focus();
@@ -1060,7 +1120,7 @@ export default function PosPage() {
           break;
         case "F4":
           e.preventDefault();
-          customerSelectRef.current?.focus();
+          customerPickerRef.current?.open();
           break;
         case "F6":
           e.preventDefault();
@@ -1105,15 +1165,18 @@ export default function PosPage() {
     setBusy(true);
     const payload = {
       items: cart.map((l) => ({
-        product_id: l.product.id,
+        product_id: l.adhoc ? null : l.product.id,
         qty: l.qty,
-        price: l.unitPrice ?? undefined,
-        imeis: l.product.track_imei
+        price: l.unitPrice ?? l.product.price,
+        imeis: !l.adhoc && l.product.track_imei
           ? (imeis[l.product.id] ?? [])
               .map((v) => v.trim())
               .filter(Boolean)
               .slice(0, l.qty)
           : undefined,
+        item_type: l.adhoc ? "AD_HOC" : undefined,
+        item_name: l.adhoc ? l.product.name : undefined,
+        line_discount: l.lineDiscount ?? undefined,
       })),
       customer_id: customer?.id ?? null,
       discount_amount: discountTotal,
@@ -1130,7 +1193,7 @@ export default function PosPage() {
     if (offline) {
       const entry = enqueueSale(payload);
       setPendingQueue(loadQueue());
-      cart.forEach((l) => applyOptimisticStock(l.product.id, l.qty));
+      cart.forEach((l) => { if (!l.adhoc) applyOptimisticStock(l.product.id, l.qty); });
       setReceipt({
         id: entry.id,
         lines: cart,
@@ -1156,7 +1219,7 @@ export default function PosPage() {
 
     try {
       const sale = await api.sales.create(payload);
-      cart.forEach((l) => applyOptimisticStock(l.product.id, l.qty));
+      cart.forEach((l) => { if (!l.adhoc) applyOptimisticStock(l.product.id, l.qty); });
       setReceipt({
         id: sale.id,
         lines: cart,
@@ -1226,9 +1289,12 @@ export default function PosPage() {
     const paid = total;
     const payload = {
       items: cart.map((l) => ({
-        product_id: l.product.id,
+        product_id: l.adhoc ? null : l.product.id,
         qty: l.qty,
-        price: l.unitPrice ?? undefined,
+        price: l.unitPrice ?? l.product.price,
+        item_type: l.adhoc ? "AD_HOC" : undefined,
+        item_name: l.adhoc ? l.product.name : undefined,
+        line_discount: l.lineDiscount ?? undefined,
       })),
       customer_id: null,
       discount_amount: discountTotal,
@@ -1241,7 +1307,7 @@ export default function PosPage() {
     if (offline) {
       const entry = enqueueSale(payload);
       setPendingQueue(loadQueue());
-      cart.forEach((l) => applyOptimisticStock(l.product.id, l.qty));
+      cart.forEach((l) => { if (!l.adhoc) applyOptimisticStock(l.product.id, l.qty); });
       setReceipt({
         id: entry.id,
         lines: cart,
@@ -1266,7 +1332,7 @@ export default function PosPage() {
 
     try {
       const sale = await api.sales.create(payload);
-      cart.forEach((l) => applyOptimisticStock(l.product.id, l.qty));
+      cart.forEach((l) => { if (!l.adhoc) applyOptimisticStock(l.product.id, l.qty); });
       setReceipt({
         id: sale.id,
         lines: cart,
@@ -1368,6 +1434,27 @@ export default function PosPage() {
     stockById,
     onSetToAvailable: setToAvailable,
     onRemoveLine: removeLine,
+    customerChip: customer ? (
+      <div className="flex items-center justify-between gap-2 rounded-xl bg-primary-50 px-3 py-2 ring-1 ring-primary-100">
+        <span className="min-w-0">
+          <span className="block truncate text-xs font-bold text-slate-900">
+            {customer.name}
+          </span>
+          <span className="block truncate text-[11px] text-slate-500">
+            {customer.phone || "No phone on file"}
+          </span>
+        </span>
+        <button
+          type="button"
+          onClick={() => selectCustomer(null)}
+          title="Reset to walk-in customer"
+          aria-label="Reset to walk-in customer"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-white hover:text-slate-700"
+        >
+          ✕
+        </button>
+      </div>
+    ) : undefined,
   };
 
   const filteredParked = useMemo(() => {
@@ -1675,28 +1762,19 @@ export default function PosPage() {
                   </button>
                 ))}
               </div>
-              <label className="flex shrink-0 items-center gap-2 text-xs font-bold text-slate-500">
-                <span className="hidden sm:inline">Customer</span>
-                <select
-                  ref={customerSelectRef}
-                  value={customer?.id ?? ""}
-                  onChange={(e) => {
-                    const id = e.target.value ? Number(e.target.value) : null;
-                    selectCustomer(
-                      id ? customers.find((c) => c.id === id) ?? null : null
-                    );
-                  }}
-                  className="select !w-auto max-w-[180px] !py-1.5 text-xs"
-                  title="Select customer (F4)"
-                >
-                  <option value="">Walk-in</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="hidden text-xs font-bold text-slate-500 sm:inline">
+                  Customer
+                </span>
+                <CustomerCombobox
+                  ref={customerPickerRef}
+                  customers={customers}
+                  value={customer}
+                  onChange={selectCustomer}
+                  onCreated={addCustomerToList}
+                  className="shrink-0"
+                />
+              </div>
             </div>
           </div>
 
@@ -2080,7 +2158,7 @@ export default function PosPage() {
           offline={receipt.offline}
           customer={receipt.customer}
           cashier={user?.full_name ?? user?.username ?? ""}
-          receiptFooter={printSettings.receipt_footer ?? ""}
+          brand={printSettings}
           onClose={() => setReceipt(null)}
         />
       )}

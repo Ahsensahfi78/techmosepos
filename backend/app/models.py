@@ -33,6 +33,7 @@ class User(Base):
     full_name = Column(String(100), nullable=False)
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(20), nullable=False, default=Role.CASHIER.value)
+    branch = Column(String(50), nullable=True)
     is_active = Column(Boolean, default=True)
     expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -100,6 +101,13 @@ class Product(Base):
     units = relationship("ProductUnit", back_populates="product")
 
 
+class Sequence(Base):
+    __tablename__ = "sequences"
+
+    name = Column(String(50), primary_key=True)
+    value = Column(Integer, nullable=False, default=0)
+
+
 class SaleStatus(str, enum.Enum):
     COMPLETED = "completed"
     PARTIAL = "partial"
@@ -119,9 +127,11 @@ class Sale(Base):
     paid_amount = Column(Float, nullable=False, default=0.0)
     payment_method = Column(String(30), nullable=True)
     loyalty_points_used = Column(Integer, nullable=False, default=0)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    branch = relationship("Branch")
     customer = relationship("Customer")
     user = relationship("User")
     items = relationship(
@@ -144,8 +154,11 @@ class SaleItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     sale_id = Column(Integer, ForeignKey("sales.id"))
     product_id = Column(Integer, ForeignKey("products.id"))
+    item_type = Column(String(20), nullable=False, default="STOCK")
+    item_name = Column(String(255), nullable=True)
     qty = Column(Integer, nullable=False, default=1)
     price = Column(Float, nullable=False, default=0.0)
+    line_discount = Column(Float, nullable=False, default=0.0)
     line_total = Column(Float, nullable=False, default=0.0)
 
     sale = relationship("Sale", back_populates="items")
@@ -154,6 +167,8 @@ class SaleItem(Base):
 
     @property
     def product_name(self) -> str:
+        if self.item_name:
+            return self.item_name
         return self.product.name if self.product else ""
 
 
@@ -199,6 +214,7 @@ class StockTransaction(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     change_qty = Column(Integer, nullable=False)
     previous_stock = Column(Integer, nullable=False)
     new_stock = Column(Integer, nullable=False)
@@ -288,6 +304,7 @@ class Customer(Base):
     phone = Column(String(50), nullable=True)
     email = Column(String(100), nullable=True)
     address = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
     loyalty_points = Column(Integer, nullable=False, default=0)
     credit_limit = Column(Float, nullable=False, default=0.0)
     due_balance = Column(Float, nullable=False, default=0.0)
@@ -378,12 +395,14 @@ class PurchaseOrder(Base):
     tax_amount = Column(Float, nullable=False, default=0.0)
     total = Column(Float, nullable=False, default=0.0)
     notes = Column(Text, nullable=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     supplier = relationship("Supplier", back_populates="purchase_orders")
     warehouse = relationship("Warehouse")
+    branch = relationship("Branch")
     items = relationship(
         "PurchaseOrderItem",
         back_populates="purchase_order",
@@ -426,6 +445,7 @@ class Purchase(Base):
     paid_amount = Column(Float, nullable=False, default=0.0)
     status = Column(String(20), nullable=False, default=PurchaseStatus.UNPAID.value, index=True)
     notes = Column(Text, nullable=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -433,6 +453,7 @@ class Purchase(Base):
     purchase_order = relationship("PurchaseOrder", back_populates="purchases")
     supplier = relationship("Supplier", back_populates="purchases")
     warehouse = relationship("Warehouse")
+    branch = relationship("Branch")
     items = relationship(
         "PurchaseItem",
         back_populates="purchase",
@@ -633,12 +654,14 @@ class StockAdjustment(Base):
     id = Column(Integer, primary_key=True, index=True)
     reference = Column(String(50), unique=True, nullable=False, index=True)
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     reason = Column(String(50), nullable=False, default="stock_count")
     note = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     warehouse = relationship("Warehouse")
+    branch = relationship("Branch")
     items = relationship(
         "StockAdjustmentItem",
         back_populates="adjustment",
@@ -716,11 +739,13 @@ class Repair(Base):
     paid_amount = Column(Float, nullable=False, default=0.0)
     technician = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     received_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     customer = relationship("Customer")
+    branch = relationship("Branch")
     user = relationship("User")
 
     @property
@@ -761,3 +786,101 @@ class EzCashReload(Base):
 
     user = relationship("User")
 
+
+# ── Branch & Multi-Branch Inventory ─────────────────────────────────────
+
+
+class Branch(Base):
+    __tablename__ = "branches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False, index=True)
+    code = Column(String(20), unique=True, nullable=False, index=True)
+    location = Column(String(200), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    stocks = relationship("BranchStock", back_populates="branch")
+    transfers_from = relationship("StockTransfer", foreign_keys="StockTransfer.from_branch_id", back_populates="from_branch")
+    transfers_to = relationship("StockTransfer", foreign_keys="StockTransfer.to_branch_id", back_populates="to_branch")
+
+
+class BranchStock(Base):
+    __tablename__ = "branch_stocks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    quantity = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    branch = relationship("Branch", back_populates="stocks")
+    product = relationship("Product")
+
+
+class StockMovement(Base):
+    __tablename__ = "stock_movements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    quantity = Column(Integer, nullable=False)
+    movement_type = Column(String(30), nullable=False, index=True)
+    reference_type = Column(String(30), nullable=True)
+    reference_id = Column(Integer, nullable=True)
+    previous_quantity = Column(Integer, nullable=False, default=0)
+    new_quantity = Column(Integer, nullable=False, default=0)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    branch = relationship("Branch")
+    product = relationship("Product")
+    user = relationship("User")
+
+
+class StockTransferStatus(str, enum.Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class StockTransfer(Base):
+    __tablename__ = "stock_transfers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    transfer_number = Column(String(50), unique=True, nullable=False, index=True)
+    from_branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
+    to_branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default=StockTransferStatus.PENDING.value, index=True)
+    notes = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    completed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    from_branch = relationship("Branch", foreign_keys=[from_branch_id], back_populates="transfers_from")
+    to_branch = relationship("Branch", foreign_keys=[to_branch_id], back_populates="transfers_to")
+    creator = relationship("User", foreign_keys=[created_by])
+    approver = relationship("User", foreign_keys=[approved_by])
+    completer = relationship("User", foreign_keys=[completed_by])
+    items = relationship("StockTransferItem", back_populates="transfer", cascade="all, delete-orphan")
+
+
+class StockTransferItem(Base):
+    __tablename__ = "stock_transfer_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    transfer_id = Column(Integer, ForeignKey("stock_transfers.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    from_quantity = Column(Integer, nullable=True)
+    to_quantity = Column(Integer, nullable=True)
+
+    transfer = relationship("StockTransfer", back_populates="items")
+    product = relationship("Product")

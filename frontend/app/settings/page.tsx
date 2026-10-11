@@ -1,32 +1,105 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/Toast";
 import EmptyState from "@/components/ui/EmptyState";
 import PageHeader from "@/components/ui/PageHeader";
+import ReceiptPaper from "@/components/ReceiptPaper";
+import type { CartLine } from "@/components/CartPanel";
+import {
+  applyReceiptRotation,
+  fitReceiptPage,
+  parseReceiptRotation,
+  RECEIPT_WIDTH_MAX_MM,
+  RECEIPT_WIDTH_MIN_MM,
+} from "@/lib/receiptTheme";
 import type { SettingValue } from "@/lib/types";
 
 const FIELDS: { key: string; label: string; hint: string }[] = [
-  { key: "store_name", label: "Store name", hint: "Shown on receipts and dashboards" },
   { key: "currency", label: "Currency symbol", hint: "e.g. Rs, $, £" },
   { key: "tax_rate", label: "Default tax rate (%)", hint: "Applied to new sales" },
   { key: "low_stock_threshold", label: "Low stock threshold", hint: "Alerts when stock falls below this" },
-  { key: "receipt_footer", label: "Receipt footer", hint: "Multi-line message printed at the bottom of receipts (one line per break)" },
 ];
 
 const EZCASH_FIELDS: { key: string; label: string; hint: string; type?: string }[] = [
   { key: "ezcash_enabled", label: "EZ Cash Enabled", hint: "true to enable, false to disable", type: "toggle" },
   { key: "ezcash_sandbox", label: "Sandbox Mode", hint: "true for test/sandbox, false for live Reloadly production", type: "toggle" },
-  { key: "ezcash_client_id", label: "Reloadly Client ID", hint: "Your Reloadly API client ID (from Dashboard > Developers > API Settings)" },
-  { key: "ezcash_client_secret", label: "Reloadly Client Secret", hint: "Your Reloadly API client secret" },
-  { key: "ezcash_timeout", label: "Request Timeout (seconds)", hint: "HTTP request timeout for Reloadly API calls" },
+  { key: "ezcash_client_id", label: "EZ Cash Client ID", hint: "From Dashboard > Developers > API Settings" },
+  { key: "ezcash_client_secret", label: "EZ Cash Client Secret", hint: "From Dashboard > Developers > API Settings" },
+  { key: "ezcash_timeout", label: "Request Timeout (seconds)", hint: "HTTP request timeout in seconds" },
   { key: "ezcash_denominations", label: "Quick Denominations", hint: "Comma-separated amounts (e.g. 100,250,500,1000)" },
 ];
 
-const DEFAULT_FOOTER_PREVIEW =
-  "Thank you for your purchase!\nReturn policy: Items eligible for return within 3 days with receipt.";
+type ReceiptField = {
+  key: string;
+  label: string;
+  hint: string;
+  kind?: "input" | "textarea";
+};
+
+const RECEIPT_FIELDS: ReceiptField[] = [
+  { key: "store_name", label: "Shop name", hint: "Bold header line at the top of every receipt" },
+  { key: "store_address", label: "Address", hint: "One line per row. Blank = line hidden" },
+  { key: "store_phone", label: "Phone number(s)", hint: "Separate multiple numbers with · or a new line" },
+  { key: "store_email", label: "Email / website", hint: "Optional. Blank = line hidden" },
+  { key: "receipt_footer", label: "Footer message", hint: "e.g. Thank you, come again! Blank = no footer" , kind: "textarea" },
+];
+
+const RECEIPT_KEYS = [
+  ...RECEIPT_FIELDS.map((f) => f.key),
+  "store_logo",
+  "receipt_width_mm",
+  "receipt_rotate_180",
+];
+
+/** Sample cart so Settings can preview a real receipt while you type. */
+const PREVIEW_LINES: CartLine[] = [
+  {
+    product: {
+      id: -1,
+      name: "Samsung Galaxy A15 128GB",
+      price: 32500,
+      stock: 1,
+      sku: "SGA15-128",
+      barcode: "4712345678901",
+    },
+    qty: 1,
+    lineDiscount: 0,
+  },
+  {
+    product: {
+      id: -2,
+      name: "USB-C Cable 1m",
+      price: 850,
+      stock: 5,
+      sku: "USBC-1M",
+      barcode: "4719876543210",
+    },
+    qty: 2,
+    lineDiscount: 100,
+  },
+];
+
+const PREVIEW_TOTALS = {
+  subtotal: 34200,
+  discount: 100,
+  tax: 0,
+  pointsUsed: 0,
+  total: 34100,
+  paid: 35000,
+  due: 0,
+  change: 900,
+  method: "cash",
+};
+
+const WIDTH_OPTIONS: number[] = Array.from(
+  { length: RECEIPT_WIDTH_MAX_MM - RECEIPT_WIDTH_MIN_MM + 1 },
+  (_, i) => RECEIPT_WIDTH_MIN_MM + i
+);
+
+const LOGO_MAX_BYTES = 300_000;
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -57,18 +130,65 @@ export default function SettingsPage() {
     load();
   }, [load]);
 
-  async function save(key: string, e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(key);
+  // Keep the preview strip and the runtime @page rule in step with the fields
+  // being edited, so Ctrl+P from this page prints the same box the POS uses.
+  const previewRef = useRef<HTMLDivElement>(null);
+  const receiptSignature = RECEIPT_KEYS.map((k) => values[k] ?? "").join(" ");
+  useEffect(() => {
+    applyReceiptRotation(values.receipt_rotate_180);
+    fitReceiptPage(previewRef.current, values.receipt_width_mm);
+  }, [loading, receiptSignature, values.receipt_width_mm, values.receipt_rotate_180]);
+
+  function setValue(key: string, value: string) {
+    setValues((v) => ({ ...v, [key]: value }));
+    setDirty((d) => ({ ...d, [key]: true }));
+  }
+
+  async function saveKeys(formKey: string, keys: string[]) {
+    setSaving(formKey);
     try {
-      await api.settings.update(key, values[key] ?? "");
+      await Promise.all(
+        keys.map((k) => api.settings.update(k, values[k] ?? ""))
+      );
       toast("Settings saved", "success");
-      setDirty((d) => ({ ...d, [key]: false }));
+      setDirty((d) => {
+        const next = { ...d };
+        keys.forEach((k) => (next[k] = false));
+        return next;
+      });
     } catch (err) {
       toast(err instanceof Error ? err.message : "Save failed", "error");
     } finally {
       setSaving(null);
     }
+  }
+
+  async function save(key: string, e: React.FormEvent) {
+    e.preventDefault();
+    await saveKeys(key, [key]);
+  }
+
+  const receiptDirty = useMemo(
+    () => RECEIPT_KEYS.some((k) => dirty[k]),
+    [dirty]
+  );
+
+  function onLogoFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast("Logo must be an image file", "error");
+      return;
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      toast("Logo must be smaller than 300 KB", "error");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setValue("store_logo", String(reader.result ?? ""));
+    reader.onerror = () => toast("Could not read that file", "error");
+    reader.readAsDataURL(file);
   }
 
   if (!isAdmin) {
@@ -84,6 +204,156 @@ export default function SettingsPage() {
   return (
     <div className="animate-fade-up">
       <PageHeader title="Settings" subtitle="Store-wide defaults used across the system" />
+
+      {/* ── Receipt / Invoice Details ─────────────────────────────────── */}
+      <div className="max-w-2xl mb-5">
+        <h2 className="text-lg font-bold text-slate-800 mb-1">
+          Receipt / Invoice Details
+        </h2>
+        <p className="mb-4 text-xs text-slate-400">
+          Printed by the POS after every sale. Leave a field blank to drop that
+          line from the receipt entirely.
+        </p>
+
+        {loading ? (
+          <div className="card grid place-items-center py-20 text-sm text-slate-400">
+            Loading…
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveKeys("__receipt__", RECEIPT_KEYS);
+            }}
+            className="card space-y-4"
+          >
+            {RECEIPT_FIELDS.map((f) => (
+              <div key={f.key}>
+                <label className="label">{f.label}</label>
+                <p className="mb-1.5 text-xs text-slate-400">{f.hint}</p>
+                {f.kind === "textarea" ? (
+                  <textarea
+                    rows={f.key === "store_address" ? 2 : 3}
+                    value={values[f.key] ?? ""}
+                    onChange={(e) => setValue(f.key, e.target.value)}
+                    className="textarea"
+                  />
+                ) : (
+                  <input
+                    value={values[f.key] ?? ""}
+                    onChange={(e) => setValue(f.key, e.target.value)}
+                    className="input"
+                  />
+                )}
+              </div>
+            ))}
+
+            <div>
+              <label className="label">Logo (optional)</label>
+              <p className="mb-1.5 text-xs text-slate-400">
+                PNG or JPG under 300 KB. Shown above the shop name.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={onLogoFile}
+                  className="text-xs text-slate-500 file:btn file:btn-sm"
+                />
+                {values.store_logo ? (
+                  <button
+                    type="button"
+                    onClick={() => setValue("store_logo", "")}
+                    className="btn btn-sm bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  >
+                    Remove
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Paper width</label>
+              <p className="mb-1.5 text-xs text-slate-400">
+                Roll width of the thermal printer, between 58mm and 80mm.
+              </p>
+              <select
+                value={values.receipt_width_mm || "80"}
+                onChange={(e) => setValue("receipt_width_mm", e.target.value)}
+                className="input"
+              >
+                {WIDTH_OPTIONS.map((mm) => (
+                  <option key={mm} value={String(mm)}>
+                    {mm} mm
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="label">Paper orientation</label>
+              <p className="mb-1.5 text-xs text-slate-400">
+                If the printed receipt comes out upside down, choose
+                &ldquo;Rotate 180°&rdquo;. Only the printed copy is rotated —
+                the preview here always stays upright. The XP-365B and similar
+                TSPL label printers are unaffected.
+              </p>
+              <select
+                data-testid="receipt-rotate"
+                value={parseReceiptRotation(values.receipt_rotate_180) === 180 ? "180" : "0"}
+                onChange={(e) =>
+                  setValue(
+                    "receipt_rotate_180",
+                    e.target.value === "180" ? "true" : "false"
+                  )
+                }
+                className="input"
+              >
+                <option value="0">Correct — print as shown</option>
+                <option value="180">Rotate 180° (upside-down printer)</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={!receiptDirty || saving === "__receipt__"}
+                className="btn btn-primary"
+              >
+                {saving === "__receipt__" ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* Live preview */}
+        {!loading && (
+          <div className="mt-5">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Preview
+            </p>
+            <div className="receipt-preview inline-block" ref={previewRef}>
+              <ReceiptPaper
+                brand={{
+                  store_name: values.store_name,
+                  store_address: values.store_address,
+                  store_phone: values.store_phone,
+                  store_email: values.store_email,
+                  store_logo: values.store_logo,
+                  receipt_footer: values.receipt_footer,
+                }}
+                meta={{
+                  saleId: "PREVIEW",
+                  cashier: "Cashier",
+                  customer: "Walk-in customer",
+                }}
+                lines={PREVIEW_LINES}
+                totals={PREVIEW_TOTALS}
+              />
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="max-w-2xl space-y-5">
         {loading ? (
@@ -101,26 +371,11 @@ export default function SettingsPage() {
                 <div className="min-w-0 flex-1">
                   <label className="label">{f.label}</label>
                   <p className="mb-1.5 text-xs text-slate-400">{f.hint}</p>
-                  {f.key === "receipt_footer" ? (
-                    <textarea
-                      rows={4}
-                      value={values[f.key] ?? ""}
-                      onChange={(e) => {
-                        setValues((v) => ({ ...v, [f.key]: e.target.value }));
-                        setDirty((d) => ({ ...d, [f.key]: true }));
-                      }}
-                      className="textarea"
-                    />
-                  ) : (
-                    <input
-                      value={values[f.key] ?? ""}
-                      onChange={(e) => {
-                        setValues((v) => ({ ...v, [f.key]: e.target.value }));
-                        setDirty((d) => ({ ...d, [f.key]: true }));
-                      }}
-                      className="input"
-                    />
-                  )}
+                  <input
+                    value={values[f.key] ?? ""}
+                    onChange={(e) => setValue(f.key, e.target.value)}
+                    className="input"
+                  />
                 </div>
                 <button
                   type="submit"
@@ -130,29 +385,6 @@ export default function SettingsPage() {
                   {saving === f.key ? "Saving…" : "Save"}
                 </button>
               </div>
-
-              {f.key === "receipt_footer" && (
-                <div className="mt-4">
-                  <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">
-                    Print preview
-                  </p>
-                  <div className="rounded-xl bg-slate-100 px-4 py-4">
-                    <div
-                      className="mx-auto bg-white px-4 py-3 font-mono text-xs text-slate-700 shadow-sm ring-1 ring-slate-200"
-                      style={{ width: "min(80mm, 100%)" }}
-                    >
-                      {((values[f.key] ?? "").trim()
-                        ? (values[f.key] ?? "").split("\n")
-                        : DEFAULT_FOOTER_PREVIEW.split("\n")
-                      ).map((line, i) => (
-                        <p key={i} className="text-center leading-relaxed">
-                          {line || "\u00A0"}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
             </form>
           ))
         )}
@@ -181,8 +413,7 @@ export default function SettingsPage() {
                         type="button"
                         onClick={() => {
                           const newVal = values[f.key] === "true" ? "false" : "true";
-                          setValues((v) => ({ ...v, [f.key]: newVal }));
-                          setDirty((d) => ({ ...d, [f.key]: true }));
+                          setValue(f.key, newVal);
                         }}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
                           values[f.key] === "true" ? "bg-emerald-500" : "bg-slate-300"
@@ -197,10 +428,7 @@ export default function SettingsPage() {
                     ) : (
                       <input
                         value={values[f.key] ?? ""}
-                        onChange={(e) => {
-                          setValues((v) => ({ ...v, [f.key]: e.target.value }));
-                          setDirty((d) => ({ ...d, [f.key]: true }));
-                        }}
+                        onChange={(e) => setValue(f.key, e.target.value)}
                         className="input"
                       />
                     )}

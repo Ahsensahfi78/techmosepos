@@ -6,13 +6,26 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useStock } from "@/hooks/useStock";
 import { categoryIcon, formatMoney } from "@/lib/constants";
+import { can } from "@/lib/nlp/permissions";
 import { useToast } from "@/components/ui/Toast";
 import { StockBadge, stockTone } from "@/components/ui/StockBadge";
 import { isLowStock, sortByStockPriority } from "@/lib/stock";
 import EmptyState from "@/components/ui/EmptyState";
 import Modal from "@/components/ui/Modal";
 import PageHeader from "@/components/ui/PageHeader";
-import type { Product } from "@/lib/types";
+import BarcodePreview from "@/components/BarcodePreview";
+import {
+  findCodeConflict,
+  generateLocalProductCode,
+  isNetworkError,
+} from "@/lib/productCode";
+import {
+  enqueueProduct,
+  loadProductQueue,
+  removeQueuedProducts,
+  updateQueuedProduct,
+} from "@/lib/offline";
+import type { BranchStock, Product } from "@/lib/types";
 
 interface FormState {
   name: string;
@@ -42,6 +55,7 @@ export default function ProductsPage() {
   const { user } = useAuth();
   const router = useRouter();
   const canManage = user?.role === "super_admin" || user?.role === "admin" || user?.role === "manager";
+  const canPrintBarcode = can(user?.role, "barcode.print");
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
@@ -55,10 +69,15 @@ export default function ProductsPage() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [codeMode, setCodeMode] = useState<"auto" | "manual">("auto");
+  const [codeNotice, setCodeNotice] = useState("");
+  const [confirmRegen, setConfirmRegen] = useState(false);
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [branchStocks, setBranchStocks] = useState<BranchStock[]>([]);
+  const [branchStockProduct, setBranchStockProduct] = useState<Product | null>(null);
   const masterRef = useRef<HTMLInputElement>(null);
 
   const categories = useMemo(
@@ -131,11 +150,42 @@ export default function ProductsPage() {
     setSelectedIds(new Set());
   }, []);
 
+  async function applyGeneratedCode(): Promise<void> {
+    let code = "";
+    try {
+      const result = await api.products.nextCode();
+      code = result.code;
+    } catch {
+      code = generateLocalProductCode(products);
+    }
+    setForm((f) => ({ ...f, sku: code, barcode: code }));
+    setCodeNotice("Unique product code generated.");
+  }
+
+  async function applyRegenerateCode(): Promise<void> {
+    let code = "";
+    try {
+      const result = await api.products.nextCode();
+      code = result.code;
+    } catch {
+      code = generateLocalProductCode(products);
+    }
+    setForm((f) => {
+      const mirrorBarcode =
+        !editing || !f.barcode.trim() || f.barcode.trim() === (editing.sku ?? "").trim();
+      return { ...f, sku: code, barcode: mirrorBarcode ? code : f.barcode };
+    });
+    setCodeNotice("Unique product code generated.");
+  }
+
   function openAdd() {
     setEditing(null);
     setForm(emptyForm);
     setFormError("");
+    setCodeMode("auto");
+    setCodeNotice("");
     setFormOpen(true);
+    void applyGeneratedCode();
   }
 
   function openEdit(p: Product) {
@@ -150,40 +200,151 @@ export default function ProductsPage() {
       min_stock: p.min_stock ? String(p.min_stock) : "",
     });
     setFormError("");
+    setCodeMode("manual");
+    setCodeNotice("");
     setFormOpen(true);
   }
 
+  function handleAutoModeClick() {
+    if (codeMode === "auto") {
+      void applyRegenerateCode();
+      return;
+    }
+    if (editing) {
+      setConfirmRegen(true);
+      return;
+    }
+    setCodeMode("auto");
+    void applyRegenerateCode();
+  }
+
+  function confirmRegenerate() {
+    setConfirmRegen(false);
+    setCodeMode("auto");
+    void applyRegenerateCode();
+  }
+
+  function handleManualModeClick() {
+    setCodeMode("manual");
+    setCodeNotice("");
+  }
+
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.name === "sku") setCodeNotice("");
     setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
   }
+
+  const flushOfflineProducts = useCallback(async () => {
+    const queue = loadProductQueue();
+    if (queue.length === 0) return;
+    let synced = 0;
+    for (const entry of queue) {
+      try {
+        await api.products.create(entry.payload);
+        removeQueuedProducts([entry.id]);
+        synced += 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "";
+        if (isNetworkError(err)) break;
+        if (/already exists/i.test(message) && entry.attempts < 2) {
+          try {
+            const { code } = await api.products.nextCode();
+            const payload = {
+              ...entry.payload,
+              sku: code,
+              barcode: entry.payload.auto_generate ? code : entry.payload.barcode,
+            };
+            updateQueuedProduct(entry.id, {
+              payload,
+              attempts: entry.attempts + 1,
+            });
+            await api.products.create(payload);
+            removeQueuedProducts([entry.id]);
+            synced += 1;
+          } catch {
+            break;
+          }
+        } else {
+          removeQueuedProducts([entry.id]);
+          toast(
+            `Offline product sync failed: ${message || "unknown error"}`,
+            "error"
+          );
+        }
+      }
+    }
+    if (synced > 0) {
+      toast(
+        `${synced} offline product${synced > 1 ? "s" : ""} synced`,
+        "success"
+      );
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void flushOfflineProducts();
+    const handleOnline = () => void flushOfflineProducts();
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [flushOfflineProducts]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
-    const payload = {
-      name: form.name.trim(),
-      price: parseFloat(form.price) || 0,
-      stock: parseInt(form.stock, 10) || 0,
-      category: form.category.trim() || "General",
-      sku: form.sku.trim() || undefined,
-      barcode: form.barcode.trim() || undefined,
-      min_stock: parseInt(form.min_stock, 10) || 0,
-    };
-    if (!payload.name) {
+    const name = form.name.trim();
+    const sku = form.sku.trim();
+    const barcode = form.barcode.trim();
+    if (!name) {
       setFormError("Product name is required.");
       return;
     }
+    if (!editing && codeMode === "manual" && !sku) {
+      setFormError("Enter a product code, or switch to Auto Generate.");
+      return;
+    }
+    const conflict =
+      findCodeConflict(products, sku, editing?.id) ??
+      (barcode.toLowerCase() !== sku.toLowerCase()
+        ? findCodeConflict(products, barcode, editing?.id)
+        : null);
+    if (conflict) {
+      setFormError(
+        `This code is already used by "${conflict.name}". Choose a different code.`
+      );
+      return;
+    }
+    const payload = {
+      name,
+      price: parseFloat(form.price) || 0,
+      stock: parseInt(form.stock, 10) || 0,
+      category: form.category.trim() || "General",
+      sku: sku || undefined,
+      barcode: barcode || undefined,
+      min_stock: parseInt(form.min_stock, 10) || 0,
+    };
     setSaving(true);
     try {
       if (editing) {
         await api.products.update(editing.id, payload);
         toast(`"${payload.name}" updated`, "success");
       } else {
-        await api.products.create(payload);
+        await api.products.create({
+          ...payload,
+          auto_generate: codeMode === "auto",
+        });
         toast(`"${payload.name}" added`, "success");
       }
       setFormOpen(false);
     } catch (err) {
+      if (!editing && isNetworkError(err)) {
+        enqueueProduct({ ...payload, auto_generate: codeMode === "auto" });
+        toast(
+          "You're offline — product saved locally and will sync automatically",
+          "success"
+        );
+        setFormOpen(false);
+        return;
+      }
       setFormError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaving(false);
@@ -193,6 +354,16 @@ export default function ProductsPage() {
   function openRestock(p: Product) {
     setRestocking(p);
     setRestockQty("");
+  }
+
+  async function openBranchStocks(p: Product) {
+    setBranchStockProduct(p);
+    try {
+      const stocks = await api.branches.productStocks(p.id);
+      setBranchStocks(stocks);
+    } catch {
+      setBranchStocks([]);
+    }
   }
 
   async function confirmRestock() {
@@ -250,6 +421,18 @@ export default function ProductsPage() {
     const payload = selected.map((p) => ({ product: p, qty: 1 }));
     try {
       sessionStorage.setItem("barcode-bulk-items", JSON.stringify(payload));
+    } catch {
+      /* ignore */
+    }
+    router.push("/barcodes");
+  }
+
+  function printProductBarcode(p: Product) {
+    try {
+      sessionStorage.setItem(
+        "barcode-bulk-items",
+        JSON.stringify([{ product: p, qty: 1 }])
+      );
     } catch {
       /* ignore */
     }
@@ -400,12 +583,14 @@ export default function ProductsPage() {
             Clear
           </button>
           <div className="ml-auto flex flex-wrap gap-2">
-            <button
-              onClick={handlePrintBarcode}
-              className="rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600"
-            >
-              🏷️ Print Barcode
-            </button>
+            {canPrintBarcode && (
+              <button
+                onClick={handlePrintBarcode}
+                className="rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600"
+              >
+                🏷️ Print Barcode
+              </button>
+            )}
             <button
               onClick={handleExportSelected}
               className="rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-600"
@@ -480,6 +665,20 @@ export default function ProductsPage() {
                     className="mt-2 w-full rounded-lg bg-amber-500 py-1.5 text-xs font-bold text-white transition hover:bg-amber-600"
                   >
                     ⬆ Restock
+                  </button>
+                )}
+                <button
+                  onClick={() => openBranchStocks(p)}
+                  className="mt-2 w-full rounded-lg bg-slate-100 dark:bg-slate-700 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 transition hover:bg-slate-200 dark:hover:bg-slate-600"
+                >
+                  🏢 Branch Stock
+                </button>
+                {(p.sku || p.barcode) && (
+                  <button
+                    onClick={() => printProductBarcode(p)}
+                    className="mt-2 w-full rounded-lg bg-emerald-50 dark:bg-emerald-900/30 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300 transition hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
+                  >
+                    ▤ Print Barcode
                   </button>
                 )}
                 <div className="mt-3 flex gap-2">
@@ -561,28 +760,6 @@ export default function ProductsPage() {
               <p className="hint">Badge turns orange when stock drops below this.</p>
             </div>
             <div>
-              <label className="label">SKU</label>
-              <input
-                name="sku"
-                value={form.sku}
-                onChange={handleChange}
-                placeholder="e.g. GAL-A15-128"
-                className="input"
-              />
-            </div>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Barcode</label>
-              <input
-                name="barcode"
-                value={form.barcode}
-                onChange={handleChange}
-                placeholder="Scan barcode"
-                className="input font-mono"
-              />
-            </div>
-            <div>
               <label className="label">Category</label>
               <input
                 name="category"
@@ -591,6 +768,106 @@ export default function ProductsPage() {
                 placeholder="General"
                 className="input"
               />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-2">
+              <label className="label mb-0">Product Code (SKU)</label>
+              <div className="flex gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+                <button
+                  type="button"
+                  onClick={handleAutoModeClick}
+                  className={`rounded-md px-2.5 py-1 text-xs font-bold transition ${
+                    codeMode === "auto"
+                      ? "bg-white text-emerald-700 shadow-sm dark:bg-slate-600 dark:text-emerald-300"
+                      : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                  }`}
+                >
+                  Auto Generate
+                </button>
+                <button
+                  type="button"
+                  onClick={handleManualModeClick}
+                  className={`rounded-md px-2.5 py-1 text-xs font-bold transition ${
+                    codeMode === "manual"
+                      ? "bg-white text-slate-800 shadow-sm dark:bg-slate-600 dark:text-slate-100"
+                      : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                  }`}
+                >
+                  Manual
+                </button>
+              </div>
+            </div>
+            <input
+              name="sku"
+              value={form.sku}
+              onChange={handleChange}
+              readOnly={codeMode === "auto"}
+              placeholder={codeMode === "auto" ? "Generating…" : "e.g. GAL-A15-128"}
+              className={`input mt-1 font-mono ${
+                codeMode === "auto" ? "bg-slate-50 dark:bg-slate-800" : ""
+              }`}
+            />
+            <div className="mt-1 flex items-center justify-between gap-2">
+              {codeMode === "auto" ? (
+                <span className="text-xs font-semibold text-emerald-600">
+                  {codeNotice || "Auto Generate is on for this product."}
+                </span>
+              ) : (
+                <span className="hint">
+                  Type a unique code — duplicates are rejected.
+                </span>
+              )}
+              {codeMode === "auto" && (
+                <button
+                  type="button"
+                  onClick={() => void applyRegenerateCode()}
+                  className="shrink-0 text-xs font-bold text-emerald-600 hover:underline"
+                >
+                  ↻ Generate new
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Barcode</label>
+              <input
+                name="barcode"
+                value={form.barcode}
+                onChange={handleChange}
+                readOnly={codeMode === "auto"}
+                placeholder={
+                  codeMode === "auto" ? "Generated from product code" : "Scan or type barcode"
+                }
+                className="input font-mono"
+              />
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <span className="hint">
+                  {codeMode === "auto"
+                    ? "Automatically generated from the product code."
+                    : "Leave empty to use the product code."}
+                </span>
+                {codeMode === "manual" && form.sku.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, barcode: f.sku.trim() }))}
+                    className="shrink-0 text-xs font-bold text-emerald-600 hover:underline"
+                  >
+                    Use product code
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="flex items-end">
+              <div className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
+                <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                  Barcode preview
+                </p>
+                <BarcodePreview value={form.barcode.trim() || form.sku.trim()} />
+              </div>
             </div>
           </div>
           {formError && (
@@ -604,6 +881,36 @@ export default function ProductsPage() {
             {saving ? "Saving…" : editing ? "Save changes" : "Add product"}
           </button>
         </form>
+      </Modal>
+
+      <Modal
+        open={confirmRegen}
+        onClose={() => setConfirmRegen(false)}
+        title="Change product code?"
+        maxWidth="max-w-sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            This product&apos;s current code is referenced by sales, purchases,
+            stock, invoices, returns, reports and printed barcodes. A new code
+            will be generated and the old code will no longer match scans or
+            searches.
+          </p>
+          <div className="flex gap-2">
+            <button
+              className="btn btn-secondary flex-1"
+              onClick={() => setConfirmRegen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary flex-1"
+              onClick={confirmRegenerate}
+            >
+              Regenerate code
+            </button>
+          </div>
+        </div>
       </Modal>
 
       <Modal
@@ -639,6 +946,30 @@ export default function ProductsPage() {
             {restockSaving ? "Saving…" : "Add stock"}
           </button>
         </div>
+      </Modal>
+
+      <Modal
+        open={!!branchStockProduct}
+        onClose={() => { setBranchStockProduct(null); setBranchStocks([]); }}
+        title={`Branch Stock — ${branchStockProduct?.name ?? ""}`}
+        maxWidth="max-w-md"
+      >
+        {branchStocks.length === 0 ? (
+          <p className="text-sm text-gray-500 py-4">No branch stock data available.</p>
+        ) : (
+          <div className="space-y-2">
+            {branchStocks.map((bs) => (
+              <div key={bs.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3 dark:bg-slate-800">
+                <div>
+                  <span className="font-medium text-slate-900 dark:text-slate-100">{bs.branch_name}</span>
+                </div>
+                <span className={`text-lg font-bold ${bs.quantity <= 0 ? "text-red-600" : bs.quantity <= (branchStockProduct?.min_stock ?? 0) ? "text-amber-600" : "text-emerald-600"}`}>
+                  {bs.quantity}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </Modal>
 
       <Modal

@@ -654,12 +654,14 @@ export default function SalesPage() {
           <>
             <div className="space-y-2">
               {returnSale.items.map((i) => {
+                const productId = i.product_id;
                 const returned = i.returned_qty ?? 0;
                 const remaining = Math.max(0, i.qty - returned);
-                const selected = returnQty[i.product_id] ?? 0;
+                const selected = productId == null ? 0 : returnQty[productId] ?? 0;
+                const trace = productId == null ? null : returnTrace?.[productId];
                 return (
                   <div
-                    key={i.product_id}
+                    key={productId ?? i.product_name}
                     className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-2.5"
                   >
                     <div>
@@ -681,36 +683,33 @@ export default function SalesPage() {
                           </span>
                         )}
                       </p>
-                    {returnTrace !== undefined &&
-                      returnTrace[i.product_id] && (
+                      {trace && (
                         <div className="mt-1.5 rounded-lg border border-sky-100 bg-sky-50 px-2 py-1.5 text-[11px] leading-snug text-sky-800">
                           <div className="font-semibold">
-                            Sourced from{" "}
-                            {returnTrace[i.product_id]!.supplier_name ??
-                              "unknown supplier"}
+                            Sourced from {trace.supplier_name ?? "unknown supplier"}
                           </div>
                           <div>
-                            {returnTrace[i.product_id]!.purchase_number} · cost{" "}
-                            {formatMoney(returnTrace[i.product_id]!.cost_price)}
-                            {returnTrace[i.product_id]!.supplier_phone && (
+                            {trace.purchase_number} · cost{" "}
+                            {formatMoney(trace.cost_price)}
+                            {trace.supplier_phone && (
                               <span className="mx-1 text-sky-300">|</span>
                             )}
                             <a
-                              href={`tel:${returnTrace[i.product_id]!.supplier_phone ?? ""}`}
+                              href={`tel:${trace.supplier_phone ?? ""}`}
                               className="font-bold underline"
                             >
-                              {returnTrace[i.product_id]!.supplier_phone}
+                              {trace.supplier_phone}
                             </a>
                           </div>
                           <div className="mt-1 flex flex-wrap gap-1">
                             <a
-                              href={`/purchases?return=1&purchase=${returnTrace[i.product_id]!.purchase_id}`}
+                              href={`/purchases?return=1&purchase=${trace.purchase_id}`}
                               className="rounded bg-amber-100 px-1.5 py-0.5 font-bold text-amber-700"
                             >
                               Return to supplier →
                             </a>
                             <a
-                              href={`/transactions?q=${encodeURIComponent(returnTrace[i.product_id]!.purchase_number)}`}
+                              href={`/transactions?q=${encodeURIComponent(trace.purchase_number)}`}
                               className="rounded bg-white px-1.5 py-0.5 font-bold text-sky-700 ring-1 ring-sky-200"
                             >
                               Trace purchase
@@ -721,13 +720,15 @@ export default function SalesPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() =>
+                        onClick={() => {
+                          if (productId == null) return;
                           setReturnQty((q) => ({
                             ...q,
-                            [i.product_id]: Math.max(0, (q[i.product_id] ?? 0) - 1),
-                          }))
-                        }
-                        className="grid h-7 w-7 place-items-center rounded-lg bg-white text-sm font-bold text-slate-600 shadow-sm ring-1 ring-slate-200 active:scale-90"
+                            [productId]: Math.max(0, (q[productId] ?? 0) - 1),
+                          }));
+                        }}
+                        disabled={productId == null}
+                        className="grid h-7 w-7 place-items-center rounded-lg bg-white text-sm font-bold text-slate-600 shadow-sm ring-1 ring-slate-200 active:scale-90 disabled:opacity-40"
                       >
                         −
                       </button>
@@ -735,16 +736,16 @@ export default function SalesPage() {
                         {selected}
                       </span>
                       <button
-                        onClick={() =>
+                        onClick={() => {
+                          if (productId == null) return;
                           setReturnQty((q) => ({
                             ...q,
-                            [i.product_id]: Math.min(
-                              remaining,
-                              (q[i.product_id] ?? 0) + 1
-                            ),
-                          }))
+                            [productId]: Math.min(remaining, (q[productId] ?? 0) + 1),
+                          }));
+                        }}
+                        disabled={
+                          productId == null || remaining <= 0 || selected >= remaining
                         }
-                        disabled={remaining <= 0 || selected >= remaining}
                         className="grid h-7 w-7 place-items-center rounded-lg bg-white text-sm font-bold text-rose-600 shadow-sm ring-1 ring-slate-200 active:scale-90 disabled:opacity-40"
                       >
                         +

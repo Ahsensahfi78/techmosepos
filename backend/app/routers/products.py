@@ -6,6 +6,7 @@ from .. import crud, models, schemas
 from ..database import get_db
 from ..manager import manager
 from ..permissions import require_permission
+from ..services import product_code_service
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -35,6 +36,14 @@ async def create_product(
         {"type": "stock_update", "product": crud.product_to_dict(product)}
     )
     return product
+
+
+@router.get("/next-code", response_model=schemas.ProductCodeOut)
+def next_product_code(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_permission("product.manage")),
+):
+    return {"code": product_code_service.next_product_code(db)}
 
 
 @router.get("/{product_id}", response_model=schemas.ProductOut)

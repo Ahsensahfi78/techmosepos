@@ -78,6 +78,7 @@ def create_user(
         email=data.email,
         full_name=data.full_name,
         role=data.role,
+        branch=data.branch,
         is_active=data.is_active,
         expires_at=data.expires_at,
         hashed_password=hash_password(data.password),

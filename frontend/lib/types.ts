@@ -4,6 +4,7 @@ export interface User {
   email: string;
   full_name: string;
   role: string;
+  branch?: string | null;
   is_active: boolean;
   created_at: string;
 }
@@ -30,11 +31,27 @@ export interface Product {
   min_stock?: number | null;
 }
 
+export interface ProductCreateInput {
+  name: string;
+  price: number;
+  stock: number;
+  category: string;
+  sku?: string;
+  barcode?: string;
+  cost_price?: number;
+  min_stock?: number;
+  description?: string;
+  auto_generate?: boolean;
+}
+
 export interface SaleItem {
-  product_id: number;
+  product_id?: number | null;
   qty: number;
   price?: number;
   imeis?: string[];
+  item_type?: string;
+  item_name?: string;
+  line_discount?: number;
 }
 
 export interface SaleInput {
@@ -46,10 +63,11 @@ export interface SaleInput {
   payment_method?: string;
   payments?: SalePaymentInput[];
   loyalty_points_used?: number;
+  branch_id?: number | null;
 }
 
 export interface SaleItemRecord {
-  product_id: number;
+  product_id: number | null;
   product_name: string;
   qty: number;
   price: number;
@@ -58,6 +76,8 @@ export interface SaleItemRecord {
   barcode?: string | null;
   model?: string | null;
   returned_qty?: number;
+  item_type?: string;
+  line_discount?: number;
 }
 
 export interface Sale {
@@ -358,6 +378,7 @@ export interface Customer {
   phone: string | null;
   email: string | null;
   address: string | null;
+  notes?: string | null;
   credit_limit: number;
   loyalty_points: number;
   due_balance: number;
@@ -592,8 +613,28 @@ export interface SettingsMap {
 /** Print-time settings returned by GET /settings/print (no admin permission needed). */
 export interface PrintSettings {
   store_name?: string;
+  store_address?: string;
+  store_phone?: string;
+  store_email?: string;
+  store_logo?: string;
   currency?: string;
   receipt_footer?: string;
+  receipt_width_mm?: string;
+  /** "true" prints the receipt upside down — for printers that feed the roll that way. */
+  receipt_rotate_180?: string;
+}
+
+/** The editable header/footer block of a printed receipt or invoice. */
+export interface ReceiptBrand {
+  store_name?: string;
+  store_address?: string;
+  store_phone?: string;
+  store_email?: string;
+  store_logo?: string;
+  receipt_footer?: string;
+  receipt_width_mm?: string;
+  /** "true" prints the receipt upside down — for printers that feed the roll that way. */
+  receipt_rotate_180?: string;
 }
 
 // ── Quotations ─────────────────────────────────────────────────────────
@@ -932,4 +973,51 @@ export interface EzCashCashierSummary {
   successful: number;
   failed: number;
   total_amount: number;
+}
+
+export interface Branch {
+  id: number;
+  name: string;
+  code: string;
+  location?: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface BranchStock {
+  id: number;
+  branch_id: number;
+  branch_name: string;
+  product_id: number;
+  product_name: string;
+  quantity: number;
+  updated_at?: string | null;
+}
+
+export interface StockTransferItem {
+  id: number;
+  product_id: number;
+  product_name: string;
+  quantity: number;
+  from_quantity?: number | null;
+  to_quantity?: number | null;
+}
+
+export interface StockTransfer {
+  id: number;
+  transfer_number: string;
+  from_branch_id: number;
+  from_branch_name: string;
+  to_branch_id: number;
+  to_branch_name: string;
+  status: string;
+  notes?: string | null;
+  created_by?: number | null;
+  created_by_name?: string | null;
+  created_at: string;
+  approved_by?: number | null;
+  approved_at?: string | null;
+  completed_by?: number | null;
+  completed_at?: string | null;
+  items: StockTransferItem[];
 }

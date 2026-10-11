@@ -197,10 +197,24 @@ body {
   }
 }
 
+/* On-screen preview of a barcode label. The print stylesheet built in
+   lib/labelPrint.ts owns the real values; these mirror them so a preview is
+   never more optimistic than what actually lands on the label. */
+.barcode-preview .barcode-image svg {
+  max-width: 100%;
+  max-height: var(--barcode-max-h, 9mm);
+  width: auto;
+  height: auto;
+}
+
 /* ── Thermal receipt ───────────────────────────────────────────────── */
 
 :root {
   --receipt-width: 80mm;
+  /* 0deg normally, 180deg when the printer feeds the roll upside down.
+     Only the @media print block below reads it, so the screen preview is
+     never rotated. Set at runtime by lib/receiptTheme.ts. */
+  --receipt-rotate: 0deg;
 }
 
 /* Receipt is rendered in a portal directly under <body>, hidden on screen. */
@@ -208,21 +222,23 @@ body {
   display: none;
 }
 
-/* Shared receipt look — used both for the on-screen preview and for print. */
+/* Shared receipt look — used both for the on-screen preview and for print.
+   No fixed height and no `break-inside: avoid` here: a tall receipt must be
+   able to start on the first page instead of being pushed whole to page 2. */
 .receipt {
-  width: var(--receipt-width);
-  max-width: var(--receipt-width);
+  width: var(--receipt-width, 80mm);
+  max-width: var(--receipt-width, 80mm);
   margin: 0 auto;
-  padding: 4mm;
+  padding: 3mm;
   box-sizing: border-box;
   background: #fff;
   color: #000;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
     monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  break-inside: avoid;
-  page-break-inside: avoid;
+  font-size: 11.5px;
+  line-height: 1.28;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
 
 .receipt p {
@@ -233,19 +249,30 @@ body {
   text-align: center;
 }
 
+.r-logo {
+  display: block;
+  max-width: 24mm;
+  max-height: 16mm;
+  width: auto;
+  height: auto;
+  margin: 0 auto 1.5mm;
+}
+
 .r-title {
   font-size: 15px;
   font-weight: 700;
+  line-height: 1.2;
   letter-spacing: 0.5px;
 }
 
 .r-sub {
-  font-size: 11px;
+  font-size: 10.5px;
+  line-height: 1.3;
 }
 
 .r-divider {
   border-top: 1px dashed #000;
-  margin: 6px 0;
+  margin: 4px 0;
 }
 
 .r-line {
@@ -303,8 +330,15 @@ body {
   page-break-inside: avoid;
 }
 
+/* Totals must never be orphaned from its rows on the next page. */
+.r-totals {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
 .r-unit {
-  font-size: 11px;
+  font-size: 10.5px;
+  line-height: 1.25;
   padding-left: 1.5em;
   opacity: 0.75;
 }
@@ -317,9 +351,9 @@ body {
 
 .r-total {
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12.5px;
   border-top: 1px dashed #000;
-  padding-top: 4px;
+  padding-top: 3px;
   margin-top: 2px;
 }
 
@@ -349,97 +383,87 @@ body {
 }
 
 @media print {
-  /* Chrome does not support CSS custom properties inside @page, so the page
-     size is hardcoded here. If switching to 58mm, change this AND
-     --receipt-width (in :root) together. */
+  /* Static fallback media box, replaced at runtime by lib/receiptTheme.ts
+     (Settings → Receipt / Invoice Details, 58–80mm wide, height measured from
+     the receipt itself).
+     Note the two explicit lengths: Chrome rejects `size: 80mm auto` as
+     invalid and silently drops the whole declaration, which used to leave
+     every receipt printing on A4 with a large blank area underneath.
+     Chrome refuses CSS custom properties inside `@page`, which is why the
+     value has to be written literally at runtime.
+     This box only governs printing THIS document (receipts). Barcode labels
+     never print from here — they are written into a hidden iframe that has
+     its own `@page` built in lib/labelPrint.ts, so the receipt media can
+     never reach a label job. */
   @page {
-    size: 80mm auto;
+    size: 80mm 300mm;
     margin: 0;
   }
 
+  /* `!important` is deliberate: layout.tsx puts Tailwind's `min-h-screen`
+     and `bg-slate-50` on <body>, and those utility classes (0,1,0) outrank
+     a bare `body` selector (0,0,1). Without it, min-height:100vh survives
+     into print and forces every short receipt onto a full screen-sized page
+     with a blank tail — the exact bug this block exists to fix. */
   html,
   body {
-    width: var(--receipt-width, 80mm);
+    height: auto !important;
+    min-height: 0 !important;
     margin: 0;
     padding: 0;
-    background: #fff;
+    background: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
-  /* Only the receipt is laid out for printing — nothing else contributes
-     page height, so no blank pages can be generated. */
-  body > *:not(#print-receipt) {
+  /* Nothing prints by default — the app shell never contributes page height,
+     so no blank pages can be generated. The receipt portal below re-shows
+     itself. Barcode labels are not printed from this document at all: they
+     go out through the hidden iframe built in lib/labelPrint.ts, which has
+     its own body, its own styles and its own label-sized @page. */
+  body > * {
     display: none !important;
   }
 
-  #print-receipt {
+  /* ── Receipt mode (#print-receipt portal) ──────────────────────────── */
+  body:has(#print-receipt) {
+    width: var(--receipt-width, 80mm);
+    height: auto;
+  }
+
+  body:has(#print-receipt) > #print-receipt {
     display: block !important;
     width: var(--receipt-width, 80mm);
+    height: auto;
     margin: 0;
     padding: 0;
     box-sizing: border-box;
     background: #fff;
   }
 
-  #print-receipt .receipt {
+  body:has(#print-receipt) #print-receipt .receipt {
     width: var(--receipt-width, 80mm);
     max-width: var(--receipt-width, 80mm);
     margin: 0;
-    padding: 4mm;
+    padding: 3mm;
     border: 0;
     box-shadow: none;
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-}
-
-/* ── Barcode label printing ───────────────────────────────────────────── */
-
-@media print {
-  @page {
-    margin: 5mm;
-  }
-
-  body * {
-    visibility: hidden !important;
-  }
-
-  #barcode-print-area,
-  #barcode-print-area * {
-    visibility: visible !important;
-  }
-
-  #barcode-print-area {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    background: #fff;
-    padding: 0;
-    margin: 0;
-    box-shadow: none;
-    border: none;
-    border-radius: 0;
-  }
-
-  #barcode-print-area .card-header {
-    display: none !important;
-  }
-
-  #barcode-print-area .barcode-grid {
-    gap: 3mm;
-  }
-
-  #barcode-print-area .barcode-cell {
-    border: 0.5pt solid #ccc !important;
-    border-radius: 0 !important;
-    padding: 2mm !important;
-    break-inside: avoid !important;
-    page-break-inside: avoid !important;
-  }
-
-  #barcode-print-area .barcode-label svg {
-    max-width: 100% !important;
-    height: auto !important;
+    /* Deliberately NOT `break-inside: avoid` — that rule alone was enough to
+       shove a long receipt wholesale onto page 2 and leave page 1 blank.
+       Metrics must stay identical to the on-screen preview, because the page
+       box is measured from that preview before printing. */
+    font-size: 11.5px;
+    line-height: 1.28;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    /* Thermal printers that feed the roll upside down are corrected here.
+       Rotating about the centre keeps the element's box — and therefore the
+       measured page height — exactly where it was, so the receipt still ends
+       on one page. 0deg is a no-op for every correctly-oriented printer.
+       Only this print rule sees the variable, so the on-screen preview and
+       the Settings preview always stay upright for reading. */
+    transform: rotate(var(--receipt-rotate, 0deg));
+    transform-origin: center center;
   }
 
   .no-print {

@@ -28,7 +28,7 @@ import {
   saveLabelConfig,
   toLabelConfig,
   safeAreaFor,
-  pageBoxFor,
+  mediaBoxFor,
   barcodeMaxHeightMm,
   DEFAULT_LABEL_CONFIG,
   LABEL_SIZE_MIN_MM,
@@ -40,7 +40,15 @@ import {
   TSPL_DPI,
   type LabelConfig,
   type LabelRotation,
+  type TsplLabel,
 } from "@/lib/labelPrint";
+import {
+  loadPrinterLanguage,
+  savePrinterLanguage,
+  isWebUsbSupported,
+  sendTsplViaWebUsb,
+  type PrinterLanguage,
+} from "@/lib/tsplPrinter";
 import { formatMoney } from "@/lib/constants";
 
 function paperToMm(paper: PaperSize): { widthMm: number; heightMm: number } {
@@ -68,6 +76,8 @@ export default function BarcodesPage() {
   const [paddingMm, setPaddingMm] = useState(String(DEFAULT_LABEL_CONFIG.paddingMm));
   const [display, setDisplay] = useState<BarcodeDisplaySettings>(DEFAULT_DISPLAY_SETTINGS);
   const [storeName, setStoreName] = useState("My Store");
+  const [printerLanguage, setPrinterLanguage] = useState<PrinterLanguage>("browser");
+  const [sendingTspl, setSendingTspl] = useState(false);
   const [preview, setPreview] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Product[]>([]);
@@ -112,12 +122,13 @@ export default function BarcodesPage() {
   );
 
   const safeArea = safeAreaFor(config);
-  const pageBox = pageBoxFor(config);
+  const mediaBox = mediaBoxFor(config);
 
   // The browser cannot read the printer's real media size, so the whole
   // geometry is chosen here and persisted (localStorage) for the next visit.
   const configRestored = useRef(false);
   const skipConfigSave = useRef(true);
+  const skipLanguageSave = useRef(true);
 
   useEffect(() => {
     if (configRestored.current) return;
@@ -135,7 +146,16 @@ export default function BarcodesPage() {
     setOffsetYMm(String(stored.offsetYmm));
     setRotation(stored.rotate);
     setPaddingMm(String(stored.paddingMm));
+    setPrinterLanguage(loadPrinterLanguage());
   }, []);
+
+  useEffect(() => {
+    if (skipLanguageSave.current) {
+      skipLanguageSave.current = false;
+      return;
+    }
+    savePrinterLanguage(printerLanguage);
+  }, [printerLanguage]);
 
   useEffect(() => {
     if (skipConfigSave.current) {
@@ -323,10 +343,36 @@ export default function BarcodesPage() {
     setSearchQuery("");
   }
 
+  const tsplLabels: TsplLabel[] = useMemo(
+    () =>
+      items.length > 0
+        ? items.flatMap((item) =>
+            Array.from({ length: item.qty }, () => ({
+              name: item.product.name,
+              barcode: item.product.barcode || item.product.sku || "",
+              price: formatMoney(item.product.price),
+            })),
+          )
+        : [
+            {
+              name: "TEST LABEL - NOT FOR SALE",
+              barcode: "TEST-0001",
+              price: "Rs 0.00",
+            },
+          ],
+    [items],
+  );
+
   function handlePrint() {
-    // Labels print from their own iframe document with its own @page box, so
+    // "TSPL" skips the browser entirely and writes the raw job to the printer,
+    // which is the only path where Chrome's page size cannot interfere.
+    if (printerLanguage === "tspl") {
+      void handleTsplPrint();
+      return;
+    }
+    // Labels print from their own window document with its own @page box, so
     // the receipt `size: 80mm auto` rule in globals.css never applies to them.
-    // window.print() is never used for labels.
+    // window.print() is never used on the app document for labels.
     if (!document.querySelector("#barcode-print-area .barcode-label")) {
       toast("Nothing to print — generate a barcode preview first", "error");
       return;
@@ -346,6 +392,10 @@ export default function BarcodesPage() {
   }
 
   function handleTestPrint() {
+    if (printerLanguage === "tspl") {
+      void handleTsplPrint();
+      return;
+    }
     try {
       printLabels(config, (msg) => toast(msg, "error"));
     } catch {
@@ -358,30 +408,47 @@ export default function BarcodesPage() {
    * Sending TSPL to the raw port bypasses the Windows driver, which is the
    * only way to get the printer's own gap sensing and the exact media box.
    */
-  function handleTsplDownload() {
-    const payload =
-      items.length > 0
-        ? items.flatMap((item) =>
-            Array.from({ length: item.qty }, () => ({
-              name: item.product.name,
-              barcode: item.product.barcode || item.product.sku || "",
-              price: formatMoney(item.product.price),
-            })),
-          )
-        : [
-            {
-              name: "TEST LABEL - NOT FOR SALE",
-              barcode: "TEST-0001",
-              price: "Rs 0.00",
-            },
-          ];
-
-    try {
-      downloadTspl(payload, config, {
+  async function handleTsplPrint() {
+    if (sendingTspl) return;
+    if (!isWebUsbSupported()) {
+      downloadTspl(tsplLabels, config, {
         dpi: TSPL_DPI,
         filename: `labels-${config.widthMm}x${config.heightMm}mm.tspl`,
       });
-      toast(`${payload.length} label${payload.length !== 1 ? "s" : ""} saved as TSPL`, "success");
+      toast(
+        "WebUSB is unavailable here, so the .tspl file was saved instead. Send it with the printer's own tool.",
+        "info",
+      );
+      return;
+    }
+    setSendingTspl(true);
+    try {
+      const { buildTspl } = await import("@/lib/labelPrint");
+      const job = buildTspl(tsplLabels, config, { dpi: TSPL_DPI });
+      const result = await sendTsplViaWebUsb(job);
+      if (result.ok) {
+        toast(result.message, "success");
+      } else {
+        toast(`${result.message} Saving the .tspl file instead.`, "error");
+        downloadTspl(tsplLabels, config, {
+          dpi: TSPL_DPI,
+          filename: `labels-${config.widthMm}x${config.heightMm}mm.tspl`,
+        });
+      }
+    } catch {
+      toast("Could not build the TSPL job", "error");
+    } finally {
+      setSendingTspl(false);
+    }
+  }
+
+  function handleTsplDownload() {
+    try {
+      downloadTspl(tsplLabels, config, {
+        dpi: TSPL_DPI,
+        filename: `labels-${config.widthMm}x${config.heightMm}mm.tspl`,
+      });
+      toast(`${tsplLabels.length} label${tsplLabels.length !== 1 ? "s" : ""} saved as TSPL`, "success");
     } catch {
       toast("Could not build the TSPL job", "error");
     }
@@ -510,6 +577,15 @@ export default function BarcodesPage() {
           </>
         )}
       </PageHeader>
+
+      <p className="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        In Chrome&apos;s print dialog set <strong>Paper size</strong> ={" "}
+        {config.widthMm}x{config.heightMm}mm (or your custom label size),{" "}
+        <strong>Margins</strong> = None, <strong>Scale</strong> = 100%,{" "}
+        <strong>Headers/footers</strong> = off. Or set{" "}
+        <strong>Printer language</strong> to TSPL below to send the job raw and
+        skip the dialog entirely.
+      </p>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div className="space-y-6">
@@ -818,17 +894,53 @@ export default function BarcodesPage() {
                 >
                   {LABEL_ROTATIONS.map((deg) => (
                     <option key={deg} value={String(deg)}>
-                      {deg}°{deg === 90 || deg === 270 ? " (turns the page sideways)" : ""}
+                      {deg}°
+                      {deg === 180
+                        ? " (upside-down printer)"
+                        : deg === 90 || deg === 270
+                          ? " (content turns inside the page)"
+                          : deg === 0
+                            ? " — default"
+                            : ""}
                     </option>
                   ))}
                 </select>
+                <p className="hint">
+                  Rotation turns the label content inside the fixed{" "}
+                  {config.widthMm} x {config.heightMm} mm page — the page size
+                  never changes. Default is 0; if the printout is upside down,
+                  switch to 180.
+                </p>
+              </div>
+
+              <div>
+                <label className="label">Printer language</label>
+                <select
+                  value={printerLanguage}
+                  onChange={(e) =>
+                    setPrinterLanguage(e.target.value as PrinterLanguage)
+                  }
+                  className="select"
+                  data-testid="printer-language"
+                >
+                  <option value="browser">Browser — Chrome print dialog</option>
+                  <option value="tspl">TSPL — send raw to the printer</option>
+                </select>
+                <p className="hint">
+                  <strong>TSPL</strong> writes the job straight to a USB label
+                  printer (WebUSB), so neither the Windows driver nor Chrome's
+                  page size can rescale it. <strong>Browser</strong> opens the
+                  print dialog instead — set Paper size to{" "}
+                  {config.widthMm}x{config.heightMm}mm, Margins None, Scale
+                  100%, Headers/footers off.
+                </p>
               </div>
 
               <div>
                 <label className="label">Geometry</label>
                 <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
                   <p>
-                    Media: <strong>{config.widthMm} x {config.heightMm} mm</strong>
+                    Media: <strong>{mediaBox.widthMm} x {mediaBox.heightMm} mm</strong>
                     {singleLabel ? " · one label per page" : ` · ${paper.cols} x ${paper.rows} grid`}
                   </p>
                   <p>
@@ -837,7 +949,7 @@ export default function BarcodesPage() {
                   <p>
                     Barcode capped at {barcodeMaxHeightMm(config)} mm · {TSPL_DPI} dpi
                     {" = "}
-                    {Math.round(pageBox.widthMm * TSPL_DPI / 25.4)} x {Math.round(pageBox.heightMm * TSPL_DPI / 25.4)} dots
+                    {Math.round(mediaBox.widthMm * TSPL_DPI / 25.4)} x {Math.round(mediaBox.heightMm * TSPL_DPI / 25.4)} dots
                   </p>
                 </div>
               </div>
@@ -845,6 +957,7 @@ export default function BarcodesPage() {
               <button
                 type="button"
                 onClick={handleTestPrint}
+                disabled={sendingTspl}
                 className="btn btn-secondary btn-sm w-full"
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -853,10 +966,30 @@ export default function BarcodesPage() {
                 Test Print
               </button>
               <p className="hint">
-                Prints one {config.widthMm} x {config.heightMm} mm sample label.
-                The solid box is the safe area; the dashed box is the label edge.
-                If content touches the dashed line, increase the inset. Nothing
-                is written to the database.
+                Prints exactly one {config.widthMm} x {config.heightMm} mm sample
+                label. The solid box is the safe area; the dashed box is the
+                label edge and must be fully visible on all four sides. If
+                content touches the dashed line, increase the inset. Default
+                rotation is 0 — if the printout is upside down, switch rotation
+                to 180. Nothing is written to the database.
+              </p>
+
+              <button
+                type="button"
+                onClick={() => void handleTsplPrint()}
+                disabled={sendingTspl}
+                className="btn btn-secondary btn-sm w-full"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                {sendingTspl ? "Sending…" : "Print via TSPL"}
+              </button>
+              <p className="hint">
+                Sends the native {TSPL_DPI} dpi job over WebUSB, bypassing the
+                Windows driver and Chrome entirely. Pick the printer once in the
+                browser dialog. Falls back to a .tspl download if WebUSB is
+                blocked.
               </p>
 
               <button
@@ -870,10 +1003,12 @@ export default function BarcodesPage() {
                 Download TSPL
               </button>
               <p className="hint">
-                Native job for TSPL printers (Xprinter XP-365B, TSC). Send it to
-                the raw port to skip the Windows driver entirely — that is the
-                only way to get the printer's own gap sensing and the exact
-                {config.widthMm} x {config.heightMm} mm box.
+                Saves the job as a .tspl file for the printer's own tool or the
+                raw port. On this stock that is SIZE {config.widthMm} mm,
+                {config.heightMm} mm / GAP {config.gapMm} mm, all content inside
+                x {Math.round(config.paddingMm * TSPL_DPI / 25.4)}-
+                {Math.round(mediaBox.widthMm * TSPL_DPI / 25.4) - Math.round(config.paddingMm * TSPL_DPI / 25.4)} and
+                y 8-{Math.round(mediaBox.heightMm * TSPL_DPI / 25.4) - 8} dots.
               </p>
 
               <div className="border-t border-slate-100 pt-4">

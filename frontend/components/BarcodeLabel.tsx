@@ -31,6 +31,10 @@ export default function BarcodeLabel({
   useEffect(() => {
     setFailed(false);
     if (!svgRef.current || !barcodeValue) return;
+    // JsBarcode sizes the viewBox from the bar count; the CSS below scales it
+    // to 100% width. preserveAspectRatio keeps the bars from stretching (or
+    // crushing) when the cap on height kicks in on a short 25mm label.
+    const fit = () => svgRef.current?.setAttribute("preserveAspectRatio", "xMidYMid meet");
     try {
       JsBarcode(svgRef.current, barcodeValue, {
         format: detectBarcodeFormat(barcodeValue),
@@ -41,6 +45,7 @@ export default function BarcodeLabel({
         background: "#ffffff",
         lineColor: "#000000",
       });
+      fit();
       return;
     } catch {
       /* fall through to CODE128 */
@@ -55,6 +60,7 @@ export default function BarcodeLabel({
         background: "#ffffff",
         lineColor: "#000000",
       });
+      fit();
     } catch {
       setFailed(true);
     }

@@ -8,3 +8,4 @@ pos.db
 *.bak
 *.log
 .env
+_probe.py

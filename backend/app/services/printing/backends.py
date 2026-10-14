@@ -22,6 +22,7 @@ Three implementations exist:
 from __future__ import annotations
 
 import abc
+import base64
 import json
 import os
 import shutil
@@ -117,6 +118,18 @@ class SubmitResult:
         }
 
 
+@dataclass
+class RawSubmitResult:
+    """Outcome of writing raw bytes straight to a print queue."""
+
+    ok: bool
+    printer: str
+    bytes_sent: int = 0
+    bytes_written: int = 0
+    error: str | None = None
+    waited_ms: int = 0
+
+
 class PrinterBackend(abc.ABC):
     name: str = "abstract"
     supported: bool = False
@@ -139,6 +152,25 @@ class PrinterBackend(abc.ABC):
         timeout: float = DEFAULT_SUBMIT_TIMEOUT,
     ) -> SubmitResult:
         """Push one test document through the OS print subsystem."""
+
+    def submit_raw(
+        self,
+        printer: str,
+        data: bytes,
+        *,
+        wait_seconds: float = 0.0,
+        timeout: float = DEFAULT_SUBMIT_TIMEOUT,
+    ) -> RawSubmitResult:
+        """Write bytes to the queue with the RAW data type.
+
+        Bypasses the printer driver entirely — no rasterisation, no EMF, no
+        driver filtering. This is the path a TSPL job has to take: the driver
+        would otherwise rewrite the DEVMODE and silently rescale the page.
+        Backends that cannot do this simply do not override this.
+        """
+        raise PrinterBackendError(
+            f"{self.name} backend cannot write raw data to a print queue"
+        )
 
     @abc.abstractmethod
     def jobs(self, printer: str, timeout: float = 15.0) -> list[dict[str, Any]]:
@@ -273,6 +305,7 @@ class MockPrinterBackend(PrinterBackend):
         self.reject_printer: str | None = None
         self.job_status: str = "Printed"
         self.submits: list[dict[str, Any]] = []
+        self.raw_jobs: list[tuple[str, bytes]] = []
         self._next_job_id = 1000
         self.jobs_by_printer: dict[str, list[dict[str, Any]]] = {}
 
@@ -348,6 +381,30 @@ class MockPrinterBackend(PrinterBackend):
             jobs_before=[],
             jobs_after=[job_id],
             elapsed_ms=1,
+        )
+
+    def submit_raw(
+        self,
+        printer: str,
+        data: bytes,
+        *,
+        wait_seconds: float = 0.0,
+        timeout: float = DEFAULT_SUBMIT_TIMEOUT,
+    ) -> RawSubmitResult:
+        if self.reject_printer == printer or printer not in self.printers:
+            return RawSubmitResult(
+                ok=False,
+                printer=printer,
+                bytes_sent=len(data),
+                error=f"Printer '{printer}' is not available to Windows",
+            )
+        self.raw_jobs.append((printer, bytes(data)))
+        return RawSubmitResult(
+            ok=True,
+            printer=printer,
+            bytes_sent=len(data),
+            bytes_written=len(data),
+            waited_ms=int(wait_seconds * 1000),
         )
 
     def jobs(self, printer: str, timeout: float = 15.0) -> list[dict[str, Any]]:
@@ -589,6 +646,58 @@ class WindowsPrinterBackend(PrinterBackend):
         )
         return result
 
+    def submit_raw(
+        self,
+        printer: str,
+        data: bytes,
+        *,
+        wait_seconds: float = 0.0,
+        timeout: float | None = None,
+    ) -> RawSubmitResult:
+        """Write TSPL (or any other byte stream) to the queue as RAW data.
+
+        No driver sees these bytes, so the printer's own media handling —
+        gap sensing, the exact 38x25mm box, its own darkness — is what runs.
+        """
+        if not data:
+            return RawSubmitResult(ok=False, printer=printer, error="payload is empty")
+
+        fd, out_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        outfile = Path(out_path)
+        try:
+            result = self._run(
+                "raw.ps1",
+                [
+                    "-PrinterName",
+                    printer,
+                    "-TextBase64",
+                    base64.b64encode(data).decode("ascii"),
+                    "-WaitSeconds",
+                    str(int(wait_seconds)),
+                ],
+                timeout or self.submit_timeout,
+                outfile=outfile,
+            )
+        except PrinterBackendError as exc:
+            return RawSubmitResult(
+                ok=False, printer=printer, bytes_sent=len(data), error=str(exc)
+            )
+        finally:
+            try:
+                outfile.unlink()
+            except OSError:
+                pass
+
+        return RawSubmitResult(
+            ok=bool(result.get("ok")),
+            printer=printer,
+            bytes_sent=len(data),
+            bytes_written=int(result.get("bytes_written") or 0),
+            error=result.get("error"),
+            waited_ms=int(result.get("waited_ms") or 0),
+        )
+
     def jobs(self, printer: str, timeout: float = 15.0) -> list[dict[str, Any]]:
         try:
             data = self._run("jobs.ps1", ["-PrinterName", printer], timeout)
@@ -605,3 +714,19 @@ def wait_for(predicate, *, timeout: float, interval: float = 0.4) -> bool:
             return True
         time.sleep(interval)
     return predicate()
+
+
+def get_backend() -> PrinterBackend:
+    """The backend for this machine.
+
+    Returns the real Windows implementation where the print APIs exist, and
+    an explicit "unsupported" backend everywhere else — never a fake that
+    pretends to have printed something.
+    """
+    if os.name == "nt":
+        backend = WindowsPrinterBackend()
+        if backend.available:
+            return backend
+        return UnsupportedPrinterBackend(backend.reason or "print API unavailable")
+    return UnsupportedPrinterBackend(f"printing is not implemented on {os.name}")
+

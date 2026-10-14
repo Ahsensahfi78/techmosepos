@@ -251,3 +251,33 @@ describe("receipt print stylesheet rotation", () => {
     expect(screenRules).not.toContain("rotate(var(--receipt-rotate");
   });
 });
+
+describe("print mode never lets the app reach the paper", () => {
+  const css = readFileSync(resolve(process.cwd(), "app", "globals.css"), "utf8");
+  const printBlock = css.slice(css.indexOf("@media print"));
+
+  it("removes the app shell from the printed layout", () => {
+    // display:none takes the shell out of layout entirely, so it cannot add
+    // page height and cannot produce blank pages.
+    expect(printBlock).toMatch(/body > \* \{[^}]*display: none !important/);
+  });
+
+  it("hides everything and re-shows only an explicit print area", () => {
+    expect(printBlock).toMatch(/body \* \{[^}]*visibility: hidden !important/);
+
+    const visibleRule = printBlock.match(
+      /(\.print-area,[^{]*?)\{\s*visibility: visible !important/,
+    );
+    expect(visibleRule).not.toBeNull();
+    const selector = visibleRule![1];
+    expect(selector).toContain(".print-area,");
+    expect(selector).toContain(".print-area *");
+    expect(selector).toContain("#print-receipt *");
+  });
+
+  it("has no fixed A4/Letter size in the print rules", () => {
+    expect(printBlock).not.toMatch(/@page \{[^}]*A4/i);
+    expect(printBlock).not.toMatch(/@page \{[^}]*Letter/i);
+    expect(printBlock).not.toMatch(/size:\s*\d+(\.\d+)?(in|cm)\b/);
+  });
+});

@@ -22,6 +22,7 @@ from .routers import (
     inventory,
     ledger,
     master,
+    printing,
     products,
     purchases,
     quotations,
@@ -130,6 +131,7 @@ app.include_router(transactions.router)
 app.include_router(ezcash.router)
 app.include_router(branches.router)
 app.include_router(transfers.router)
+app.include_router(printing.router)
 
 
 @app.get("/")

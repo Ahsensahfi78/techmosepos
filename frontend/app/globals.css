@@ -197,14 +197,18 @@ body {
   }
 }
 
-/* On-screen preview of a barcode label. The print stylesheet built in
-   lib/labelPrint.ts owns the real values; these mirror them so a preview is
+/* On-screen preview of a barcode label.
+   The SVG is authored at whatever width JsBarcode computed from the bar
+   count; filling the safe area and letting preserveAspectRatio keep the
+   shape means a short symbol never blows past the 34mm safe width, and the
+   height cap keeps a wide symbol from colliding with the price line.
+   lib/labelPrint.ts owns the print values; this mirrors them so a preview is
    never more optimistic than what actually lands on the label. */
 .barcode-preview .barcode-image svg {
+  width: 100%;
+  height: auto;
   max-width: 100%;
   max-height: var(--barcode-max-h, 9mm);
-  width: auto;
-  height: auto;
 }
 
 /* ── Thermal receipt ───────────────────────────────────────────────── */
@@ -419,10 +423,35 @@ body {
   /* Nothing prints by default — the app shell never contributes page height,
      so no blank pages can be generated. The receipt portal below re-shows
      itself. Barcode labels are not printed from this document at all: they
-     go out through the hidden iframe built in lib/labelPrint.ts, which has
+     go out through a dedicated print window (lib/labelPrint.ts) which has
      its own body, its own styles and its own label-sized @page. */
   body > * {
     display: none !important;
+  }
+
+  /* Belt and braces on top of display:none above: hide the whole subtree and
+     re-show only what is explicitly marked as a print area. visibility does
+     not affect layout, so this cannot add page height — it just guarantees
+     that even if an ancestor were re-shown by mistake, the app chrome around
+     a print area would still never reach the paper. */
+  body * {
+    visibility: hidden !important;
+  }
+
+  .print-area,
+  .print-area *,
+  #print-receipt,
+  #print-receipt * {
+    visibility: visible !important;
+  }
+
+  .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    margin: 0;
+    padding: 0;
+    background: #fff;
   }
 
   /* ── Receipt mode (#print-receipt portal) ──────────────────────────── */

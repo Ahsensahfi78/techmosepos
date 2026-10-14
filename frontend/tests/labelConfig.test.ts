@@ -4,10 +4,13 @@ import {
   LABEL_ROTATIONS,
   barcodeMaxHeightMm,
   buildLabelDocument,
+  buildTestLabelHtml,
   buildTspl,
   loadLabelConfig,
+  mediaBoxFor,
   mmToDots,
   pageBoxFor,
+  rotatedBoxFor,
   safeAreaFor,
   saveLabelConfig,
   sheetTransform,
@@ -135,35 +138,76 @@ describe("pageBoxFor / sheetTransform", () => {
     });
   });
 
-  it("counter-translates a 90° label so it lands inside the swapped box", () => {
-    expect(sheetTransform({ ...STOCK, rotate: 90 })).toBe(
-      "translateX(25mm) rotate(90deg)",
-    );
-    expect(sheetTransform({ ...STOCK, rotate: 180 })).toBe(
-      "translate(38mm, 25mm) rotate(180deg)",
-    );
-    expect(sheetTransform({ ...STOCK, rotate: 270 })).toBe(
-      "translateY(38mm) rotate(270deg)",
-    );
+  it("never changes the media box for any rotation", () => {
+    // The media box is what @page is sized from. If rotation changed it the
+    // driver would receive a different page and rescale the whole job.
+    for (const rotate of [0, 90, 180, 270] as const) {
+      expect(mediaBoxFor({ ...STOCK, rotate })).toEqual({
+        widthMm: 38,
+        heightMm: 25,
+      });
+    }
   });
 
-  it("applies the offset in page space, after the rotation", () => {
+  it("turns the wrapper box on its side only for 90°/270°", () => {
+    expect(rotatedBoxFor({ ...STOCK, rotate: 0 })).toEqual({
+      widthMm: 38,
+      heightMm: 25,
+    });
+    expect(rotatedBoxFor({ ...STOCK, rotate: 180 })).toEqual({
+      widthMm: 38,
+      heightMm: 25,
+    });
+    expect(rotatedBoxFor({ ...STOCK, rotate: 90 })).toEqual({
+      widthMm: 25,
+      heightMm: 38,
+    });
+    expect(rotatedBoxFor({ ...STOCK, rotate: 270 })).toEqual({
+      widthMm: 25,
+      heightMm: 38,
+    });
+  });
+
+  it("rotates the content about its centre — the page never translates", () => {
+    expect(sheetTransform({ ...STOCK, rotate: 90 })).toBe("rotate(90deg)");
+    expect(sheetTransform({ ...STOCK, rotate: 180 })).toBe("rotate(180deg)");
+    expect(sheetTransform({ ...STOCK, rotate: 270 })).toBe("rotate(270deg)");
+  });
+
+  it("applies the offset in page space, before the rotation in the list", () => {
     expect(sheetTransform({ ...STOCK, offsetXmm: 1.5, offsetYmm: -1 })).toBe(
       "translate(1.5mm, -1mm)",
     );
     expect(
       sheetTransform({ ...STOCK, rotate: 90, offsetXmm: 1, offsetYmm: 2 }),
-    ).toBe("translate(1mm, 2mm) translateX(25mm) rotate(90deg)");
+    ).toBe("translate(1mm, 2mm) rotate(90deg)");
   });
 
-  it("emits a swapped @page when the label is turned sideways", () => {
+  it("keeps @page at the media size and turns only the wrapper", () => {
     const html = buildLabelDocument(
       ["<div class='barcode-label'>A</div>"],
       { ...STOCK, rotate: 90 },
     );
-    expect(html).toContain("@page { size: 25mm 38mm; margin: 0; }");
-    expect(html).toContain("transform-origin: 0 0");
-    expect(html).toContain("transform: translateX(25mm) rotate(90deg)");
+    // The page MUST stay 38x25 — a swapped @page hands the driver a different
+    // media box and the whole job gets rescaled onto the wrong stock.
+    expect(html).toContain("@page { size: 38mm 25mm; margin: 0; }");
+    expect(html).toContain("transform-origin: center center");
+    expect(html).toContain("transform: rotate(90deg)");
+    // The wrapper is the media box turned on its side, centred inside it.
+    expect(html).toMatch(/\.rot \{[^}]*width: 25mm/);
+    expect(html).toMatch(/\.rot \{[^}]*height: 38mm/);
+    expect(html).toContain('<div class="rot"><div class="sheet">');
+  });
+
+  it("never changes the page size for a 180° label", () => {
+    const html = buildLabelDocument(
+      ["<div class='barcode-label'>A</div>"],
+      { ...STOCK, rotate: 180 },
+    );
+    expect(html).toContain("@page { size: 38mm 25mm; margin: 0; }");
+    expect(html).toMatch(/\.rot \{[^}]*width: 38mm/);
+    expect(html).toMatch(/\.rot \{[^}]*height: 25mm/);
+    expect(html).toContain("transform: rotate(180deg)");
   });
 
   it("exposes every right angle", () => {
@@ -185,7 +229,35 @@ describe("barcodeMaxHeightMm", () => {
     const html = buildLabelDocument(["<div class='barcode-label'>A</div>"], STOCK);
     expect(html).toContain("--barcode-max-h: 9mm");
     expect(html).toMatch(/\.barcode-image svg \{[^}]*max-height: var\(--barcode-max-h/);
-    expect(html).toMatch(/\.barcode-image svg \{[^}]*max-width: 100%/);
+    expect(html).toMatch(/\.barcode-image svg \{[^}]*width: 100%/);
+  });
+
+  it("locks html/body to the label width so nothing floats on an A4 page", () => {
+    // This is the fix for "Chrome shows a large page with the label floating
+    // in the middle". The document is the label's own width, so even if
+    // @page were dropped the content could never stretch to A4.
+    const html = buildLabelDocument(["<div class='barcode-label'>A</div>"], STOCK);
+    expect(html).toMatch(/html, body \{[^}]*width: 38mm;/);
+    expect(html).toMatch(/html, body \{[^}]*margin: 0;/);
+    expect(html).toMatch(/html, body \{[^}]*padding: 0;/);
+  });
+
+  it("never clamps body height, or later labels would be clipped away", () => {
+    const html = buildLabelDocument(
+      ["<div class='barcode-label'>1</div>", "<div class='barcode-label'>2</div>"],
+      STOCK,
+    );
+    // Height must stay auto: .page is one label tall and carries the page
+    // break, so 2 labels become 2 pages and 1 label becomes exactly 1 page.
+    expect(html).toMatch(/html, body \{[^}]*height: auto;/);
+    expect(html).not.toMatch(/html, body \{[^}]*overflow: hidden/);
+    expect(html).toMatch(/\.page \{[^}]*height: 25mm;/);
+  });
+
+  it("pins the media box and never lets the document grow past it", () => {
+    const html = buildLabelDocument(["<div class='barcode-label'>A</div>"], STOCK);
+    expect(html).toMatch(/@page \{ size: 38mm 25mm; margin: 0; \}/);
+    expect(html).toMatch(/\.page \{[^}]*width: 38mm;[^}]*height: 25mm;/);
   });
 });
 
@@ -211,6 +283,12 @@ describe("label content rules", () => {
     expect(doc.match(/<section class="page">/g)).toHaveLength(2);
     expect(doc).toContain('<div class="sheet">');
   });
+
+  it("wraps every label in a rotation box inside the page", () => {
+    const doc = buildLabelDocument(["<div class='barcode-label'>A</div>"], STOCK);
+    expect(doc).toContain('<div class="rot"><div class="sheet">');
+    expect(doc).toMatch(/\.rot \{[^}]*transform-origin: center center/);
+  });
 });
 
 describe("test print edge marker", () => {
@@ -223,6 +301,27 @@ describe("test print edge marker", () => {
     // The stylesheet always carries the rule; only the body class turns it on.
     expect(realDoc).toMatch(/<body>/);
     expect(realDoc).not.toMatch(/<body class=/);
+  });
+
+  it("draws the dashed edge fully inside the page so all four sides print", () => {
+    const doc = buildLabelDocument(["<div>x</div>"], STOCK, null, true);
+    const rule = doc.match(/\.test-edge \.page::after \{[^}]*\}/)?.[0] ?? "";
+    // A border on an inset box is painted inside the element, so .page's
+    // overflow:hidden can never clip the top/bottom/left/right edge.
+    expect(rule).toContain("border: 0.35mm dashed #000");
+    expect(rule).toMatch(/inset: 0\.35mm/);
+    expect(rule).not.toContain("outline");
+    // Half the border thickness inside the box keeps the stroke on-page.
+    expect(rule).toMatch(/inset: ([\d.]+)mm/);
+    expect(parseFloat(rule.match(/inset: ([\d.]+)mm/)![1])).toBeGreaterThan(0);
+  });
+
+  it("prints the test label as exactly one page", () => {
+    const doc = buildLabelDocument([buildTestLabelHtml()], STOCK, null, true);
+    expect(doc.match(/<section class="page">/g)).toHaveLength(1);
+    expect(doc).toContain("page-break-after: always");
+    // The last page releases the break, so no blank label follows it.
+    expect(doc).toContain(".page:last-child");
   });
 
   it("draws the safe area as a solid box on the test label", () => {
@@ -304,7 +403,8 @@ describe("buildTspl", () => {
     expect(tspl).toContain("SIZE 38 mm, 25 mm");
     expect(tspl).toContain("GAP 2 mm, 0 mm");
     expect(tspl).toContain("DENSITY 8");
-    expect(tspl).toContain("DIRECTION 1");
+    // Default is DIRECTION 0; DIRECTION 1 is what "Rotate 180" maps to.
+    expect(tspl).toContain("DIRECTION 0");
     expect(tspl).toContain("CLS");
     expect(tspl.trimEnd().endsWith("PRINT 1")).toBe(true);
   });
@@ -336,7 +436,7 @@ describe("buildTspl", () => {
   });
 
   it("reverses the feed for a printer that hands the label back inverted", () => {
-    expect(buildTspl(labels, { ...STOCK, rotate: 180 })).toContain("DIRECTION 0");
+    expect(buildTspl(labels, { ...STOCK, rotate: 180 })).toContain("DIRECTION 1");
   });
 
   it("notes that a sideways label cannot be expressed in TSPL", () => {
@@ -348,7 +448,22 @@ describe("buildTspl", () => {
   it("honours a non-default gap and inset", () => {
     const tspl = buildTspl(labels, { ...STOCK, gapMm: 3, paddingMm: 1 });
     expect(tspl).toContain("GAP 3 mm, 0 mm");
-    expect(tspl).toContain('TEXT 8,8,"2",0,1,1,"25W Fast Charger"');
+    // 1mm inset = 8 dots; the name sits 4 dots below the 8-dot top margin.
+    expect(tspl).toContain('TEXT 8,12,"2",0,1,1,"25W Fast Charger"');
+  });
+
+  it("pins the content to the band the printer can actually reach", () => {
+    const tspl = buildTspl(labels, STOCK);
+    // 38x25mm @203dpi = 304x200 dots; the safe band is x 16-288, y 8-192.
+    const coords = Array.from(tspl.matchAll(/(TEXT|BARCODE) (\d+),(\d+),/g)).map(
+      (m) => ({ x: Number(m[2]), y: Number(m[3]) }),
+    );
+    for (const c of coords) {
+      expect(c.x).toBeGreaterThanOrEqual(16);
+      expect(c.x).toBeLessThanOrEqual(288);
+      expect(c.y).toBeGreaterThanOrEqual(8);
+      expect(c.y).toBeLessThanOrEqual(192);
+    }
   });
 
   it("strips quotes and non-ASCII from the built-in fonts", () => {

@@ -13,8 +13,32 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Labels print from a real popup window, because Chrome sizes the print
+ * dialog from the TOP-LEVEL browsing context — an iframe inherits the app's
+ * A4 page setup and its own `@page { size: 38mm 25mm }` gets ignored. The
+ * popup is a separate Puppeteer target, so it has to be tracked explicitly
+ * and its frames merged in with the main page's.
+ */
+let popupPage = null;
+
+async function allFrames(page) {
+  const frames = [...page.frames()];
+  if (popupPage && !popupPage.isClosed()) {
+    for (const f of popupPage.frames()) {
+      if (!frames.includes(f)) frames.push(f);
+    }
+  }
+  return frames;
+}
+
+/** The target that owns the label document — popup when there is one. */
+function printTarget(page) {
+  return popupPage && !popupPage.isClosed() ? popupPage : page;
+}
+
 async function findLabelFrame(page) {
-  for (const f of page.frames()) {
+  for (const f of await allFrames(page)) {
     const ok = await f
       .evaluate(() => !!document.querySelector(".page"))
       .catch(() => false);
@@ -25,7 +49,7 @@ async function findLabelFrame(page) {
 
 async function inspectFrames(page) {
   const out = [];
-  for (const frame of page.frames()) {
+  for (const frame of await allFrames(page)) {
     let info;
     try {
       info = await frame.evaluate(() => {
@@ -64,7 +88,10 @@ async function assertPrintMedia(page) {
   const frame = await findLabelFrame(page);
   if (!frame) return { error: "label frame not found" };
 
-  await page.emulateMediaType("print");
+  // Media emulation is per target: a frame inside the popup is only affected
+  // when the popup itself is emulated.
+  const target = printTarget(page);
+  await target.emulateMediaType("print");
   let report;
   try {
     report = await frame.evaluate(() => {
@@ -110,7 +137,7 @@ async function assertPrintMedia(page) {
       };
     });
   } finally {
-    await page.emulateMediaType("screen");
+    await printTarget(page).emulateMediaType("screen");
   }
 
   // Same stylesheet under screen media, but real geometry this time.
@@ -194,8 +221,10 @@ async function run() {
   page.on("console", (m) => logs.push(`[${m.type()}] ${m.text()}`));
   page.on("pageerror", (e) => logs.push(`[pageerror] ${e.message}`));
 
-  // Runs in every frame (including our label iframe) before page scripts.
-  await page.evaluateOnNewDocument(() => {
+  // Runs in every frame (including our label document) before page scripts.
+  const installPrintProbe = () => {
+    if (window.__probeInstalled) return true;
+    window.__probeInstalled = true;
     window.__printCalls = window.__printCalls || 0;
     window.print = function () {
       window.__printCalls += 1;
@@ -209,6 +238,55 @@ async function run() {
       window.__printDoc = document.documentElement.outerHTML.slice(0, 8000);
       return undefined;
     };
+    return true;
+  };
+  await page.evaluateOnNewDocument(installPrintProbe);
+
+  // The label job opens a real popup (see allFrames above): Chrome sizes the
+  // print dialog from the top-level browsing context, so the labels cannot
+  // live in an iframe. A popup's print() fires within a couple of rAFs of
+  // window.open — faster than CDP's async `popup` event — so waiting for that
+  // event always loses the race. Patching window.open makes the probe land
+  // synchronously, in the same turn, before the app writes anything.
+  const installOpenPatch = () => {
+    if (window.__openPatched) return true;
+    window.__openPatched = true;
+    const origOpen = window.open.bind(window);
+    window.open = (...args) => {
+      const w = origOpen(...args);
+      try {
+        if (w && typeof w.print === "function") {
+          w.__probeInstalled = true;
+          w.__printCalls = w.__printCalls || 0;
+          w.print = function () {
+            w.__printCalls += 1;
+            const d = w.document;
+            const links = [...d.querySelectorAll("link[rel='stylesheet']")];
+            w.__printProbe = {
+              readyState: d.readyState,
+              unloadedSheets: links.filter((l) => !l.sheet).length,
+              bodyChildren: d.body ? d.body.children.length : -1,
+              at: Date.now(),
+            };
+            w.__printDoc = d.documentElement.outerHTML.slice(0, 8000);
+            return undefined;
+          };
+        }
+      } catch {
+        /* window already gone or cross-origin */
+      }
+      return w;
+    };
+    return true;
+  };
+  await page.evaluateOnNewDocument(installOpenPatch);
+
+  page.on("popup", (p) => {
+    popupPage = p;
+    p.on("pageerror", (e) => logs.push(`[popup pageerror] ${e.message}`));
+    p.on("console", (m) => logs.push(`[popup ${m.type()}] ${m.text()}`));
+    // Backup for a popup opened outside our patched window.open.
+    void p.evaluateOnNewDocument(installPrintProbe).catch(() => {});
   });
 
   const result = { steps: [], frames: [], ok: false };
@@ -217,8 +295,40 @@ async function run() {
     // ── login ────────────────────────────────────────────────────────────
     await page.goto(`${BASE}/login`, { waitUntil: "networkidle2", timeout: 60000 });
     await page.waitForSelector('input[placeholder="Enter username"]', { timeout: 30000 });
-    await page.type('input[placeholder="Enter username"]', "admin");
-    await page.type('input[type="password"]', "admin123");
+
+    // Drive React's own value setter. page.type() keystrokes can land before
+    // hydration, and the re-render then replaces the inputs with empty ones —
+    // the form submits blank and the app answers "required".
+    const fill = (sel, val) =>
+      page.evaluate(
+        (s, v) => {
+          const el = document.querySelector(s);
+          if (!el) return false;
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+          setter.call(el, v);
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          return el.value === v;
+        },
+        sel,
+        val,
+      );
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const ok = (await fill('input[placeholder="Enter username"]', "admin")) &&
+        (await fill('input[type="password"]', "admin123"));
+      if (ok) break;
+      await sleep(500);
+    }
+
+    await page.waitForFunction(
+      () => {
+        const u = document.querySelector('input[placeholder="Enter username"]');
+        const p = document.querySelector('input[type="password"]');
+        return !!u && !!p && u.value === "admin" && p.value === "admin123";
+      },
+      { timeout: 15000 },
+    );
+
     await page.click('button[type="submit"]');
     try {
       await page.waitForFunction(
@@ -279,7 +389,7 @@ async function run() {
     for (let i = 0; i < 40; i++) {
       await sleep(250);
       const hits = [];
-      for (const f of page.frames()) {
+      for (const f of await allFrames(page)) {
         try {
           const n = await f.evaluate(() => window.__printCalls || 0);
           if (n > 0) hits.push(n);
@@ -291,16 +401,18 @@ async function run() {
     }
 
     result.frames = await inspectFrames(page);
+    const frames = await allFrames(page);
     result.printCalls = await Promise.all(
-      page.frames().map((f) =>
+      frames.map((f) =>
         f.evaluate(() => window.__printCalls || 0).catch(() => -1),
       ),
     );
     result.probe = await Promise.all(
-      page.frames().map((f) =>
+      frames.map((f) =>
         f.evaluate(() => window.__printProbe || null).catch(() => null),
       ),
     );
+    result.usesPopup = Boolean(popupPage && !popupPage.isClosed());
     const fired = result.probe.filter(Boolean);
     result.ok = fired.length > 0;
     // Chrome refuses / blanks a print() issued while the frame is still

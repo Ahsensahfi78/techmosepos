@@ -14,10 +14,20 @@ param(
     [string]$Text,
     [string]$TextPath,
     [string]$TextBase64,
-    [int]$WaitSeconds = 0
+    [int]$WaitSeconds = 0,
+    [string]$OutFile
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Write-Payload($Object) {
+    $json = $Object | ConvertTo-Json -Depth 6 -Compress
+    if ($OutFile) {
+        $enc = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($OutFile, $json, $enc)
+    }
+    [Console]::Out.Write($json)
+}
 
 $result = [ordered]@{
     ok            = $false
@@ -29,7 +39,7 @@ $result = [ordered]@{
 
 if (-not $Text -and -not $TextPath -and -not $TextBase64) {
     $result.error = 'One of -Text, -TextPath or -TextBase64 is required.'
-    ConvertTo-Json $result -Compress
+    Write-Payload $result
     exit 3
 }
 
@@ -46,7 +56,7 @@ try {
 
     if (-not $bytes -or $bytes.Length -eq 0) {
         $result.error = 'Payload is empty.'
-        ConvertTo-Json $result -Compress
+        Write-Payload $result
         exit 3
     }
 
@@ -135,5 +145,5 @@ namespace PosRawPrinter
     $result.error = $_.Exception.Message
 }
 
-ConvertTo-Json $result -Compress
+Write-Payload $result
 if ($result.ok) { exit 0 } else { exit 4 }

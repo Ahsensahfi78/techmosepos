@@ -165,8 +165,8 @@ async function assertPrintMedia(page) {
 /** Write the frame's HTML out and count the pages Chrome paginates it into. */
 async function pdfProbe(browser, frameHtml, labelSections) {
   const file = path.join(HERE, "label-frame.html");
-  // Duplicate the single label so the .page:last-child rule is exercised:
-  // 3 labels must become 3 pages, never 4 (the old trailing blank page).
+  // Duplicate the single label so the .page + .page break-before rule is
+  // exercised: 3 labels must become 3 pages, never 4 (a trailing blank page).
   const section = frameHtml.match(
     /<section class="page"[\s\S]*?<\/section>/,
   )?.[0];

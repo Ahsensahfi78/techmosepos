@@ -749,6 +749,30 @@ export const api = {
     cancel: (id: number) =>
       request<StockTransfer>(`/transfers/${id}/cancel`, { method: "POST" }),
   },
+  printing: {
+    printers: () =>
+      request<{
+        supported: boolean;
+        platform: string;
+        printers: Array<{
+          name: string;
+          driver?: string;
+          port?: string;
+          is_default?: boolean;
+          queue_status?: string;
+        }>;
+      }>("/printing/printers"),
+    raw: (printer: string, dataB64: string) =>
+      request<{
+        ok: boolean;
+        printer: string;
+        bytes_sent: number;
+        error?: string;
+      }>("/printing/raw", {
+        method: "POST",
+        body: JSON.stringify({ printer, data_b64: dataB64 }),
+      }),
+  },
 };
 
 type MasterEntity<T> = {

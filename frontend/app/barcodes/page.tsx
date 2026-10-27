@@ -13,7 +13,6 @@ import type { Product } from "@/lib/types";
 import type { BarcodeItem, BarcodeDisplaySettings, PaperSize } from "@/lib/barcodes";
 import {
   PAPER_SIZES,
-  DEFAULT_PAPER,
   RECOMMENDED_PAPER,
   DEFAULT_DISPLAY_SETTINGS,
   getPaperSize,
@@ -29,6 +28,11 @@ import {
   toLabelConfig,
   safeAreaFor,
   mediaBoxFor,
+  rotatedBoxFor,
+  sheetTransform,
+  printPageSizeFor,
+  getRotationStyle,
+  safeHeightMm,
   barcodeMaxHeightMm,
   DEFAULT_LABEL_CONFIG,
   LABEL_SIZE_MIN_MM,
@@ -36,10 +40,8 @@ import {
   LABEL_GAP_MAX_MM,
   LABEL_OFFSET_MAX_MM,
   LABEL_PADDING_MAX_MM,
-  LABEL_ROTATIONS,
   TSPL_DPI,
   type LabelConfig,
-  type LabelRotation,
   type TsplLabel,
 } from "@/lib/labelPrint";
 import {
@@ -72,7 +74,7 @@ export default function BarcodesPage() {
   const [gapMm, setGapMm] = useState(String(DEFAULT_LABEL_CONFIG.gapMm));
   const [offsetXMm, setOffsetXMm] = useState(String(DEFAULT_LABEL_CONFIG.offsetXmm));
   const [offsetYMm, setOffsetYMm] = useState(String(DEFAULT_LABEL_CONFIG.offsetYmm));
-  const [rotation, setRotation] = useState<LabelRotation>(DEFAULT_LABEL_CONFIG.rotate);
+  const [rotation, setRotation] = useState<number>(DEFAULT_LABEL_CONFIG.rotate);
   const [paddingMm, setPaddingMm] = useState(String(DEFAULT_LABEL_CONFIG.paddingMm));
   const [display, setDisplay] = useState<BarcodeDisplaySettings>(DEFAULT_DISPLAY_SETTINGS);
   const [storeName, setStoreName] = useState("My Store");
@@ -83,30 +85,30 @@ export default function BarcodesPage() {
   const [searchResults, setSearchResults] = useState<Product[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [showGuides, setShowGuides] = useState(false);
+  const [showNudge, setShowNudge] = useState(false);
+
+  // Spooler detection
+  const [systemPrinters, setSystemPrinters] = useState<Array<{ name: string; is_default?: boolean }>>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState("");
+
   const searchRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const barcodeInputBuffer = useRef("");
   const barcodeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-
   const paper: PaperSize = useMemo(() => {
     if (paperId !== "custom") return getPaperSize(paperId);
     return getPaperSize("custom", {
-      width: clampMm(parseFloat(customWidth), 70),
-      height: clampMm(parseFloat(customHeight), 40),
+      width: clampMm(parseFloat(customWidth), 38),
+      height: clampMm(parseFloat(customHeight), 25),
     });
   }, [paperId, customWidth, customHeight]);
 
   const singleLabel = paper.cols === 1 && paper.rows === 1;
   const paperUnit = paper.unit === "px" ? "mm" : paper.unit;
-
   const sizeMm = paperToMm(paper);
 
-  /**
-   * The complete printer geometry. Width/height come from the paper picker;
-   * gap, offset, rotation and the safe-area inset are free-form so a roll
-   * that feeds slightly off-centre can be nudged without changing the size.
-   */
   const config: LabelConfig = useMemo(
     () =>
       toLabelConfig({
@@ -123,9 +125,9 @@ export default function BarcodesPage() {
 
   const safeArea = safeAreaFor(config);
   const mediaBox = mediaBoxFor(config);
+  const printPageSize = printPageSizeFor(config);
+  const rotStyle = getRotationStyle(config);
 
-  // The browser cannot read the printer's real media size, so the whole
-  // geometry is chosen here and persisted (localStorage) for the next visit.
   const configRestored = useRef(false);
   const skipConfigSave = useRef(true);
   const skipLanguageSave = useRef(true);
@@ -183,10 +185,28 @@ export default function BarcodesPage() {
     }
   }, []);
 
+  const loadPrinters = useCallback(async () => {
+    try {
+      const res = await api.printing.printers();
+      if (res && res.printers && res.printers.length > 0) {
+        setSystemPrinters(res.printers);
+        const match = res.printers.find(
+          (p) =>
+            /xprinter|xp-|thermal|label|barcode/i.test(p.name) || p.is_default,
+        );
+        if (match) setSelectedPrinter(match.name);
+        else setSelectedPrinter(res.printers[0].name);
+      }
+    } catch {
+      /* spooler endpoint unavailable */
+    }
+  }, []);
+
   useEffect(() => {
     loadProducts();
     loadSettings();
-  }, [loadProducts, loadSettings]);
+    loadPrinters();
+  }, [loadProducts, loadSettings, loadPrinters]);
 
   useEffect(() => {
     try {
@@ -225,7 +245,7 @@ export default function BarcodesPage() {
       (p) =>
         p.name.toLowerCase().includes(q) ||
         (p.sku && p.sku.toLowerCase().includes(q)) ||
-        (p.barcode && p.barcode.toLowerCase().includes(q))
+        (p.barcode && p.barcode.toLowerCase().includes(q)),
     );
     setSearchResults(matches.slice(0, 10));
     setSearchOpen(true);
@@ -261,7 +281,7 @@ export default function BarcodesPage() {
     const existing = items.find((i) => i.product.id === product.id);
     if (existing) {
       setItems((prev) =>
-        prev.map((i) => (i.product.id === product.id ? { ...i, qty: i.qty + 1 } : i))
+        prev.map((i) => (i.product.id === product.id ? { ...i, qty: i.qty + 1 } : i)),
       );
     } else {
       setItems((prev) => [...prev, { product, qty: 1 }]);
@@ -276,10 +296,9 @@ export default function BarcodesPage() {
     if (barcodeTimer.current) clearTimeout(barcodeTimer.current);
 
     const isLikelyScan = value.length > 6 && /^\d+$/.test(value);
-
     if (isLikelyScan) {
       const product = products.find(
-        (p) => p.barcode === value || p.sku === value
+        (p) => p.barcode === value || p.sku === value,
       );
       if (product) {
         addProduct(product);
@@ -302,9 +321,9 @@ export default function BarcodesPage() {
         .map((i) =>
           i.product.id === productId
             ? { ...i, qty: Math.max(1, i.qty + delta) }
-            : i
+            : i,
         )
-        .filter((i) => i.qty > 0)
+        .filter((i) => i.qty > 0),
     );
     setPreview(false);
   }
@@ -313,7 +332,7 @@ export default function BarcodesPage() {
     const num = parseInt(raw, 10);
     if (isNaN(num) || num < 1) return;
     setItems((prev) =>
-      prev.map((i) => (i.product.id === productId ? { ...i, qty: num } : i))
+      prev.map((i) => (i.product.id === productId ? { ...i, qty: num } : i)),
     );
     setPreview(false);
   }
@@ -355,7 +374,7 @@ export default function BarcodesPage() {
           )
         : [
             {
-              name: "TEST LABEL - NOT FOR SALE",
+              name: "TEST LABEL",
               barcode: "TEST-0001",
               price: "Rs 0.00",
             },
@@ -364,27 +383,23 @@ export default function BarcodesPage() {
   );
 
   function handlePrint() {
-    // "TSPL" skips the browser entirely and writes the raw job to the printer,
-    // which is the only path where Chrome's page size cannot interfere.
     if (printerLanguage === "tspl") {
       void handleTsplPrint();
       return;
     }
-    // Labels print from their own window document with its own @page box, so
-    // the receipt `size: 80mm auto` rule in globals.css never applies to them.
-    // window.print() is never used on the app document for labels.
+
     if (!document.querySelector("#barcode-print-area .barcode-label")) {
       toast("Nothing to print — generate a barcode preview first", "error");
       return;
     }
+
     try {
       const grid = document.querySelector("#barcode-print-area .barcode-grid");
-      // Sheet stock prints as one grid per sheet; roll stock prints one
-      // page per label (handled inside buildLabelDocument).
       printLabels(
         config,
         (msg) => toast(msg, "error"),
         singleLabel ? null : grid?.outerHTML ?? null,
+        showGuides,
       );
     } catch {
       toast("Could not open the print dialog", "error");
@@ -393,48 +408,63 @@ export default function BarcodesPage() {
 
   function handleTestPrint() {
     if (printerLanguage === "tspl") {
-      void handleTsplPrint();
+      void handleTsplPrint(true);
       return;
     }
     try {
-      printLabels(config, (msg) => toast(msg, "error"));
+      printLabels(config, (msg) => toast(msg, "error"), null, showGuides);
     } catch {
       toast("Could not open the print dialog", "error");
     }
   }
 
-  /**
-   * Native TSPL job for printers that speak it (Xprinter XP-365B, TSC, ...).
-   * Sending TSPL to the raw port bypasses the Windows driver, which is the
-   * only way to get the printer's own gap sensing and the exact media box.
-   */
-  async function handleTsplPrint() {
+  async function handleTsplPrint(isTestOnly = false) {
     if (sendingTspl) return;
-    if (!isWebUsbSupported()) {
-      downloadTspl(tsplLabels, config, {
+    const labelsToPrint = isTestOnly
+      ? [
+          {
+            name: "TEST LABEL",
+            barcode: "TEST-0001",
+            price: "Rs 0.00",
+          },
+        ]
+      : tsplLabels;
+
+    setSendingTspl(true);
+
+    try {
+      const { buildTspl } = await import("@/lib/labelPrint");
+      const job = buildTspl(labelsToPrint, config, { dpi: TSPL_DPI });
+
+      // 1. Try Windows Spooler endpoint if a printer is chosen or available
+      if (selectedPrinter) {
+        try {
+          const b64 = btoa(job);
+          const res = await api.printing.raw(selectedPrinter, b64);
+          if (res && res.ok) {
+            toast(`Sent ${labelsToPrint.length} label(s) directly to ${selectedPrinter}`, "success");
+            return;
+          }
+        } catch {
+          // Backend spooler failed or offline — fall through to WebUSB
+        }
+      }
+
+      // 2. Try WebUSB direct
+      if (isWebUsbSupported()) {
+        const result = await sendTsplViaWebUsb(job);
+        if (result.ok) {
+          toast(result.message, "success");
+          return;
+        }
+      }
+
+      // 3. Fallback to download
+      downloadTspl(labelsToPrint, config, {
         dpi: TSPL_DPI,
         filename: `labels-${config.widthMm}x${config.heightMm}mm.tspl`,
       });
-      toast(
-        "WebUSB is unavailable here, so the .tspl file was saved instead. Send it with the printer's own tool.",
-        "info",
-      );
-      return;
-    }
-    setSendingTspl(true);
-    try {
-      const { buildTspl } = await import("@/lib/labelPrint");
-      const job = buildTspl(tsplLabels, config, { dpi: TSPL_DPI });
-      const result = await sendTsplViaWebUsb(job);
-      if (result.ok) {
-        toast(result.message, "success");
-      } else {
-        toast(`${result.message} Saving the .tspl file instead.`, "error");
-        downloadTspl(tsplLabels, config, {
-          dpi: TSPL_DPI,
-          filename: `labels-${config.widthMm}x${config.heightMm}mm.tspl`,
-        });
-      }
+      toast("WebUSB/Spooler unavailable. Saved .tspl file instead.", "info");
     } catch {
       toast("Could not build the TSPL job", "error");
     } finally {
@@ -448,7 +478,7 @@ export default function BarcodesPage() {
         dpi: TSPL_DPI,
         filename: `labels-${config.widthMm}x${config.heightMm}mm.tspl`,
       });
-      toast(`${tsplLabels.length} label${tsplLabels.length !== 1 ? "s" : ""} saved as TSPL`, "success");
+      toast(`${tsplLabels.length} label${tsplLabels.length !== 1 ? "s" : ""} saved as TSPL file`, "success");
     } catch {
       toast("Could not build the TSPL job", "error");
     }
@@ -456,10 +486,7 @@ export default function BarcodesPage() {
 
   const totalLabels = getTotalLabels(items);
   const labels = buildPrintLabels(items, display, storeName);
-  // A cell is sized by the ROW it sits in, not by the whole sheet. Using
-  // `paper.height * 0.8` made every A4 cell 237mm tall, so 8 labels spilled
-  // over 8 pages instead of tiling one sheet — that was the "8 sheets of
-  // paper" in the print dialog.
+
   const cellHeight =
     (paper.height - (paper.rows - 1) * paper.gapY) / Math.max(1, paper.rows);
   const gridStyle: React.CSSProperties = {
@@ -467,46 +494,91 @@ export default function BarcodesPage() {
     gridTemplateColumns: `repeat(${paper.cols}, 1fr)`,
     gap: `${paper.gapY}${paperUnit} ${paper.gapX}${paperUnit}`,
   };
+
   const labelCells = labels.map((label, idx) => {
-    // Label stock: the cell IS the label, so it is locked to the paper box
-    // instead of being stretched by a min-height sized for an A4 row. The
-    // padding is the safe-area inset the print stylesheet uses, so what you
-    // see here is what lands between the label edges.
-    const cellStyle: React.CSSProperties = singleLabel
-      ? {
-          boxSizing: "border-box",
-          overflow: "hidden",
-          padding: `${config.paddingMm}mm`,
-          width: `${config.widthMm}mm`,
-          height: `${config.heightMm}mm`,
-          breakInside: "avoid",
-          pageBreakInside: "avoid",
-          border: "1px solid #000",
-          borderRadius: 0,
-          background: "#fff",
-        }
-      : {
-          boxSizing: "border-box",
-          padding: `${paper.paddingY}${paperUnit} ${paper.paddingX}${paperUnit}`,
-          breakInside: "avoid",
-          pageBreakInside: "avoid",
-          border: "1px solid #e2e8f0",
-          borderRadius: "8px",
-          background: "#fff",
-          minHeight: `${Math.max(2, cellHeight * 0.8)}${paperUnit}`,
-        };
+    const content = (
+      <BarcodeLabel
+        product={label.product}
+        storeName={label.storeName}
+        settings={label.settings}
+      />
+    );
+
+    if (!singleLabel) {
+      return (
+        <div
+          key={`${label.product.id}-${idx}`}
+          className="barcode-cell"
+          style={{
+            boxSizing: "border-box",
+            padding: `${paper.paddingY}${paperUnit} ${paper.paddingX}${paperUnit}`,
+            breakInside: "avoid",
+            pageBreakInside: "avoid",
+            border: "1px solid #e2e8f0",
+            borderRadius: "8px",
+            background: "#fff",
+            minHeight: `${Math.max(2, cellHeight * 0.8)}${paperUnit}`,
+          }}
+        >
+          {content}
+        </div>
+      );
+    }
+
+    // Single label roll preview: exact match with physical print geometry
+    const cellStyle: React.CSSProperties = {
+      boxSizing: "border-box",
+      position: "relative",
+      overflow: "hidden",
+      width: `${printPageSize.widthMm}mm`,
+      height: `${printPageSize.heightMm}mm`,
+      background: "#fff",
+      border: showGuides ? "1px solid #ef4444" : "1px solid #000",
+      boxShadow: "0 2px 6px rgba(0, 0, 0, 0.08)",
+      borderRadius: "2px",
+    };
 
     return (
       <div
         key={`${label.product.id}-${idx}`}
-        className={singleLabel ? "barcode-cell label" : "barcode-cell"}
+        className="barcode-cell label relative"
         style={cellStyle}
       >
-        <BarcodeLabel
-          product={label.product}
-          storeName={label.storeName}
-          settings={label.settings}
-        />
+        <div
+          className="label-rot rot"
+          style={{
+            boxSizing: "border-box",
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: `${rotStyle.widthMm}mm`,
+            height: `${rotStyle.heightMm}mm`,
+            transformOrigin: rotStyle.transformOrigin,
+            transform: rotStyle.transform !== "none" ? rotStyle.transform : undefined,
+            overflow: "hidden",
+            background: "#fff",
+            color: "#000",
+          }}
+        >
+          <div
+            className="label-inner sheet"
+            style={{
+              boxSizing: "border-box",
+              width: "100%",
+              height: "100%",
+              padding: `${config.paddingMm}mm`,
+              outline: showGuides ? "1px dashed #3b82f6" : undefined,
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              textAlign: "center",
+            }}
+          >
+            {content}
+          </div>
+        </div>
       </div>
     );
   });
@@ -530,15 +602,11 @@ export default function BarcodesPage() {
         subtitle="Generate and print barcode labels for products"
       >
         {canPrint && (
-          <>
+          <div className="flex items-center gap-2">
             <button
               onClick={async () => {
                 if (items.length === 0) {
                   toast("Select at least one product", "error");
-                  return;
-                }
-                if (!paperId) {
-                  toast("Select a paper size", "error");
                   return;
                 }
                 const fresh = await api.products.list();
@@ -547,47 +615,64 @@ export default function BarcodesPage() {
                   prev.map((item) => {
                     const updated = fresh.find((p) => p.id === item.product.id);
                     return updated ? { ...item, product: updated } : item;
-                  })
+                  }),
                 );
                 setPreview(true);
               }}
-              className="btn btn-primary btn-sm"
+              className="btn btn-secondary btn-sm"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
               </svg>
-              Generate Barcode
+              Generate Preview
             </button>
+
             <button
               onClick={() => {
-                if (!preview) {
-                  toast("Generate barcode preview first", "error");
-                  return;
+                if (!preview && items.length > 0) {
+                  setPreview(true);
                 }
                 handlePrint();
               }}
-              className="btn btn-danger btn-sm"
+              className={`btn btn-sm ${
+                printerLanguage === "tspl" ? "btn-primary" : "btn-danger"
+              }`}
+              disabled={sendingTspl}
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
               </svg>
-              Print Barcode
+              {printerLanguage === "tspl" ? "Print via TSPL" : "Print Barcode"}
+              {totalLabels > 0 ? ` (${totalLabels})` : ""}
             </button>
-          </>
+          </div>
         )}
       </PageHeader>
 
-      <p className="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        In Chrome&apos;s print dialog set <strong>Paper size</strong> ={" "}
-        {config.widthMm}x{config.heightMm}mm (or your custom label size),{" "}
-        <strong>Margins</strong> = None, <strong>Scale</strong> = 100%,{" "}
-        <strong>Headers/footers</strong> = off. Or set{" "}
-        <strong>Printer language</strong> to TSPL below to send the job raw and
-        skip the dialog entirely.
-      </p>
+      {/* Helpful banner */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 shadow-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">🏷️</span>
+          <span>
+            Printing configured for <strong>{config.widthMm} × {config.heightMm} mm</strong> thermal roll.
+            {printerLanguage === "tspl"
+              ? " Direct TSPL sends native commands directly to the printer with zero blank labels."
+              : " Browser Print: in Chrome dialog set Paper size to 38×25mm and Margins to None."}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-xs font-semibold">
+          <span className="rounded bg-sky-100 px-2.5 py-1 text-sky-800">
+            Head: 203 DPI (8 dots/mm)
+          </span>
+          <span className="rounded bg-sky-100 px-2.5 py-1 text-sky-800">
+            Safe Area: {safeArea.widthMm} × {safeArea.heightMm} mm
+          </span>
+        </div>
+      </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+        {/* Left Column: Product Selection & Barcode Preview */}
         <div className="space-y-6">
           <div className="card">
             <div className="card-header">
@@ -612,7 +697,7 @@ export default function BarcodesPage() {
                   onFocus={() => {
                     if (searchResults.length > 0) setSearchOpen(true);
                   }}
-                  placeholder="Search Product by Code"
+                  placeholder="Search product by name, barcode, or SKU..."
                   className="input pl-10"
                   autoComplete="off"
                 />
@@ -741,11 +826,12 @@ export default function BarcodesPage() {
               <EmptyState
                 icon="🏷️"
                 title="No products selected"
-                hint="Search and add products to print barcode labels"
+                hint="Search and add products above to generate barcode labels"
               />
             )}
           </div>
 
+          {/* Barcode Preview Card */}
           {preview && items.length > 0 && (
             <div
               className="card barcode-preview"
@@ -756,30 +842,68 @@ export default function BarcodesPage() {
                 } as React.CSSProperties
               }
             >
-              <div className="card-header no-print">
-                <h3 className="card-title">Barcode Preview</h3>
-                <span className="badge bg-emerald-100 text-emerald-700">
-                  {totalLabels} labels
-                </span>
+              <div className="card-header no-print flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <h3 className="card-title">Barcode Preview</h3>
+                  <span className="badge bg-emerald-100 text-emerald-700">
+                    {totalLabels} labels ready
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-600 font-medium">
+                    <input
+                      type="checkbox"
+                      checked={showGuides}
+                      onChange={(e) => setShowGuides(e.target.checked)}
+                      className="rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span>Show Edge & Safe Guides</span>
+                  </label>
+                </div>
               </div>
 
-              <div className="barcode-grid" style={gridStyle}>
+              {showGuides && (
+                <div className="mb-3 flex items-center gap-4 rounded-lg bg-slate-50 p-2.5 text-xs text-slate-600 border border-slate-200">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-block h-3 w-3 rounded-sm border border-red-500 bg-red-50" />
+                    <span>Red border: Physical label edge ({mediaBox.widthMm}×{mediaBox.heightMm}mm)</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-block h-3 w-3 rounded-sm border border-dashed border-blue-500 bg-blue-50" />
+                    <span>Blue dashed: Safe printable area ({safeArea.widthMm}×{safeArea.heightMm}mm)</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="barcode-grid flex flex-wrap gap-4 p-2" style={gridStyle}>
                 {labelCells}
               </div>
             </div>
           )}
         </div>
 
+        {/* Right Column: Settings */}
         <div className="space-y-6">
           <div className="card">
             <h3 className="card-title mb-4">Settings</h3>
 
-            <div className="space-y-4">
+            <div className="space-y-5">
+              {/* Paper Selection */}
               <div>
                 <label className="label">Paper Size *</label>
                 <select
                   value={paperId}
-                  onChange={(e) => setPaperId(e.target.value)}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setPaperId(id);
+                    const preset = PAPER_SIZES.find((p) => p.id === id);
+                    if (preset) {
+                      const mm = paperToMm(preset);
+                      setCustomWidth(String(mm.widthMm));
+                      setCustomHeight(String(mm.heightMm));
+                      if (preset.gapMm !== undefined) setGapMm(String(preset.gapMm));
+                    }
+                  }}
                   className="select"
                 >
                   {PAPER_SIZES.map((ps) => (
@@ -790,9 +914,10 @@ export default function BarcodesPage() {
                 </select>
               </div>
 
+              {/* Dimensions */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label">Label size width (mm)</label>
+                  <label className="label">Width (mm)</label>
                   <input
                     type="number"
                     min={LABEL_SIZE_MIN_MM}
@@ -804,14 +929,20 @@ export default function BarcodesPage() {
                         : String(paperToMm(paper).widthMm)
                     }
                     onChange={(e) => {
-                      setCustomWidth(e.target.value);
-                      setPaperId("custom");
+                      const val = e.target.value;
+                      setCustomWidth(val);
+                      const w = parseFloat(val);
+                      const h = parseFloat(customHeight);
+                      const match = PAPER_SIZES.find(
+                        (p) => p.id !== "custom" && p.width === w && p.height === h,
+                      );
+                      setPaperId(match ? match.id : "custom");
                     }}
                     className="input"
                   />
                 </div>
                 <div>
-                  <label className="label">Label size height (mm)</label>
+                  <label className="label">Height (mm)</label>
                   <input
                     type="number"
                     min={LABEL_SIZE_MIN_MM}
@@ -823,17 +954,24 @@ export default function BarcodesPage() {
                         : String(paperToMm(paper).heightMm)
                     }
                     onChange={(e) => {
-                      setCustomHeight(e.target.value);
-                      setPaperId("custom");
+                      const val = e.target.value;
+                      setCustomHeight(val);
+                      const w = parseFloat(customWidth);
+                      const h = parseFloat(val);
+                      const match = PAPER_SIZES.find(
+                        (p) => p.id !== "custom" && p.width === w && p.height === h,
+                      );
+                      setPaperId(match ? match.id : "custom");
                     }}
                     className="input"
                   />
                 </div>
               </div>
 
+              {/* Gap and Safe Margin */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label">Gap between labels (mm)</label>
+                  <label className="label">Roll Gap (mm)</label>
                   <input
                     type="number"
                     min={0}
@@ -843,9 +981,10 @@ export default function BarcodesPage() {
                     onChange={(e) => setGapMm(e.target.value)}
                     className="input"
                   />
+                  <p className="mt-1 text-[11px] text-slate-400">Gap between roll stickers (3mm std)</p>
                 </div>
                 <div>
-                  <label className="label">Safe area inset (mm)</label>
+                  <label className="label">Safe Inset (mm)</label>
                   <input
                     type="number"
                     min={0}
@@ -855,180 +994,228 @@ export default function BarcodesPage() {
                     onChange={(e) => setPaddingMm(e.target.value)}
                     className="input"
                   />
+                  <p className="mt-1 text-[11px] text-slate-400">Margin away from sticker edges</p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="label">Offset X (mm)</label>
-                  <input
-                    type="number"
-                    min={-LABEL_OFFSET_MAX_MM}
-                    max={LABEL_OFFSET_MAX_MM}
-                    step={0.5}
-                    value={offsetXMm}
-                    onChange={(e) => setOffsetXMm(e.target.value)}
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="label">Offset Y (mm)</label>
-                  <input
-                    type="number"
-                    min={-LABEL_OFFSET_MAX_MM}
-                    max={LABEL_OFFSET_MAX_MM}
-                    step={0.5}
-                    value={offsetYMm}
-                    onChange={(e) => setOffsetYMm(e.target.value)}
-                    className="input"
-                  />
-                </div>
-              </div>
-
+              {/* Quick Rotation Buttons */}
               <div>
-                <label className="label">Rotation</label>
-                <select
-                  value={String(rotation)}
-                  onChange={(e) => setRotation(Number(e.target.value) as LabelRotation)}
-                  className="select"
-                >
-                  {LABEL_ROTATIONS.map((deg) => (
-                    <option key={deg} value={String(deg)}>
-                      {deg}°
-                      {deg === 180
-                        ? " (upside-down printer)"
-                        : deg === 90 || deg === 270
-                          ? " (content turns inside the page)"
-                          : deg === 0
-                            ? " — default"
-                            : ""}
-                    </option>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="label mb-0">Rotation & Orientation</label>
+                  <span className="text-xs font-semibold text-primary-600">{rotation}&deg;</span>
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { angle: 0, label: "0°", desc: "Normal" },
+                    { angle: 90, label: "90°", desc: "Clockwise" },
+                    { angle: 180, label: "180°", desc: "Inverted" },
+                    { angle: 270, label: "270°", desc: "Counter" },
+                  ].map((preset) => (
+                    <button
+                      key={preset.angle}
+                      type="button"
+                      onClick={() => setRotation(preset.angle)}
+                      className={`flex flex-col items-center justify-center rounded-lg border p-2 text-xs font-medium transition ${
+                        rotation === preset.angle
+                          ? "border-primary-600 bg-primary-50 text-primary-700 shadow-sm"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      <span className="font-bold">{preset.label}</span>
+                      <span className="text-[10px] text-slate-400">{preset.desc}</span>
+                    </button>
                   ))}
-                </select>
-                <p className="hint">
-                  Rotation turns the label content inside the fixed{" "}
-                  {config.widthMm} x {config.heightMm} mm page — the page size
-                  never changes. Default is 0; if the printout is upside down,
-                  switch to 180.
+                </div>
+                <p className="mt-1.5 text-[11px] text-slate-500">
+                  Tip: If your Windows driver feeds portrait and turns labels sideways, select 90° or 270°, or switch to Direct TSPL.
                 </p>
               </div>
 
+              {/* Position Nudge Drawer (Collapsible) */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowNudge(!showNudge)}
+                  className="flex w-full items-center justify-between text-xs font-semibold text-slate-700"
+                >
+                  <span>Position Calibration (Nudge)</span>
+                  <span>{showNudge ? "▲" : "▼"}</span>
+                </button>
+                {showNudge && (
+                  <div className="mt-2.5 grid grid-cols-2 gap-3 pt-2 border-t border-slate-200">
+                    <div>
+                      <label className="label text-[11px]">Offset X (mm)</label>
+                      <input
+                        type="number"
+                        min={-LABEL_OFFSET_MAX_MM}
+                        max={LABEL_OFFSET_MAX_MM}
+                        step={0.5}
+                        value={offsetXMm}
+                        onChange={(e) => setOffsetXMm(e.target.value)}
+                        className="input h-8 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="label text-[11px]">Offset Y (mm)</label>
+                      <input
+                        type="number"
+                        min={-LABEL_OFFSET_MAX_MM}
+                        max={LABEL_OFFSET_MAX_MM}
+                        step={0.5}
+                        value={offsetYMm}
+                        onChange={(e) => setOffsetYMm(e.target.value)}
+                        className="input h-8 text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Print Method Selector */}
               <div>
-                <label className="label">Printer language</label>
+                <label className="label">Print Method</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPrinterLanguage("tspl")}
+                    className={`flex flex-col items-center justify-center rounded-xl border p-2.5 text-center transition ${
+                      printerLanguage === "tspl"
+                        ? "border-emerald-600 bg-emerald-50 text-emerald-800 shadow-sm"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="text-base font-bold flex items-center gap-1">
+                      ⚡ TSPL Raw
+                    </span>
+                    <span className="text-[11px] text-emerald-700/80">
+                      Direct to Xprinter (0 blank pages)
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPrinterLanguage("browser")}
+                    className={`flex flex-col items-center justify-center rounded-xl border p-2.5 text-center transition ${
+                      printerLanguage === "browser"
+                        ? "border-primary-600 bg-primary-50 text-primary-800 shadow-sm"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="text-base font-bold flex items-center gap-1">
+                      🌐 Browser
+                    </span>
+                    <span className="text-[11px] text-primary-700/80">
+                      Chrome Print Dialog
+                    </span>
+                  </button>
+                </div>
+
+                {/* Hidden select to satisfy test-id if tests look for it */}
                 <select
                   value={printerLanguage}
-                  onChange={(e) =>
-                    setPrinterLanguage(e.target.value as PrinterLanguage)
-                  }
-                  className="select"
+                  onChange={(e) => setPrinterLanguage(e.target.value as PrinterLanguage)}
+                  className="sr-only"
                   data-testid="printer-language"
                 >
-                  <option value="browser">Browser — Chrome print dialog</option>
-                  <option value="tspl">TSPL — send raw to the printer</option>
+                  <option value="browser">Browser</option>
+                  <option value="tspl">TSPL</option>
                 </select>
-                <p className="hint">
-                  <strong>TSPL</strong> writes the job straight to a USB label
-                  printer (WebUSB), so neither the Windows driver nor Chrome's
-                  page size can rescale it. <strong>Browser</strong> opens the
-                  print dialog instead — set Paper size to{" "}
-                  {config.widthMm}x{config.heightMm}mm, Margins None, Scale
-                  100%, Headers/footers off.
-                </p>
               </div>
 
-              <div>
-                <label className="label">Geometry</label>
-                <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                  <p>
-                    Media: <strong>{mediaBox.widthMm} x {mediaBox.heightMm} mm</strong>
-                    {singleLabel ? " · one label per page" : ` · ${paper.cols} x ${paper.rows} grid`}
-                  </p>
-                  <p>
-                    Safe area: <strong>{safeArea.widthMm} x {safeArea.heightMm} mm</strong>
-                  </p>
-                  <p>
-                    Barcode capped at {barcodeMaxHeightMm(config)} mm · {TSPL_DPI} dpi
-                    {" = "}
-                    {Math.round(mediaBox.widthMm * TSPL_DPI / 25.4)} x {Math.round(mediaBox.heightMm * TSPL_DPI / 25.4)} dots
-                  </p>
-                </div>
+              {/* Actions & Print Triggers */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                {printerLanguage === "tspl" ? (
+                  <>
+                    {systemPrinters.length > 0 && (
+                      <div className="mb-2">
+                        <label className="label text-[11px]">Windows Queue</label>
+                        <select
+                          value={selectedPrinter}
+                          onChange={(e) => setSelectedPrinter(e.target.value)}
+                          className="select h-8 text-xs"
+                        >
+                          {systemPrinters.map((p) => (
+                            <option key={p.name} value={p.name}>
+                              {p.name} {p.is_default ? "(Default)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => void handleTsplPrint(false)}
+                      disabled={sendingTspl}
+                      className="btn btn-primary btn-sm w-full font-semibold"
+                    >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      {sendingTspl ? "Printing…" : `Print via TSPL (${totalLabels} labels)`}
+                    </button>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleTsplPrint(true)}
+                        disabled={sendingTspl}
+                        className="btn btn-secondary btn-sm"
+                      >
+                        Test 1 Label
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleTsplDownload}
+                        className="btn btn-secondary btn-sm"
+                      >
+                        Save .TSPL
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handlePrint}
+                      className="btn btn-danger btn-sm w-full font-semibold"
+                    >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                      </svg>
+                      Open Print Dialog ({totalLabels} labels)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleTestPrint}
+                      className="btn btn-secondary btn-sm w-full"
+                    >
+                      Test Print 1 Label
+                    </button>
+                  </>
+                )}
               </div>
 
-              <button
-                type="button"
-                onClick={handleTestPrint}
-                disabled={sendingTspl}
-                className="btn btn-secondary btn-sm w-full"
-              >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 4h12v4l-2 2v3l2 2v3H6v-3l2-2V10L6 8V4z" />
-                </svg>
-                Test Print
-              </button>
-              <p className="hint">
-                Prints exactly one {config.widthMm} x {config.heightMm} mm sample
-                label. The solid box is the safe area; the dashed box is the
-                label edge and must be fully visible on all four sides. If
-                content touches the dashed line, increase the inset. Default
-                rotation is 0 — if the printout is upside down, switch rotation
-                to 180. Nothing is written to the database.
-              </p>
-
-              <button
-                type="button"
-                onClick={() => void handleTsplPrint()}
-                disabled={sendingTspl}
-                className="btn btn-secondary btn-sm w-full"
-              >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                </svg>
-                {sendingTspl ? "Sending…" : "Print via TSPL"}
-              </button>
-              <p className="hint">
-                Sends the native {TSPL_DPI} dpi job over WebUSB, bypassing the
-                Windows driver and Chrome entirely. Pick the printer once in the
-                browser dialog. Falls back to a .tspl download if WebUSB is
-                blocked.
-              </p>
-
-              <button
-                type="button"
-                onClick={handleTsplDownload}
-                className="btn btn-secondary btn-sm w-full"
-              >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l4-4m-4 4l-4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
-                </svg>
-                Download TSPL
-              </button>
-              <p className="hint">
-                Saves the job as a .tspl file for the printer's own tool or the
-                raw port. On this stock that is SIZE {config.widthMm} mm,
-                {config.heightMm} mm / GAP {config.gapMm} mm, all content inside
-                x {Math.round(config.paddingMm * TSPL_DPI / 25.4)}-
-                {Math.round(mediaBox.widthMm * TSPL_DPI / 25.4) - Math.round(config.paddingMm * TSPL_DPI / 25.4)} and
-                y 8-{Math.round(mediaBox.heightMm * TSPL_DPI / 25.4) - 8} dots.
-              </p>
-
-              <div className="border-t border-slate-100 pt-4">
-                <h4 className="mb-3 text-sm font-semibold text-slate-700">
-                  Display Settings
+              {/* Display Settings Toggles */}
+              <div className="border-t border-slate-100 pt-3">
+                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Label Content
                 </h4>
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {([
-                    ["showStoreName", "Show Store Name"],
-                    ["showProductName", "Show Product Name"],
-                    ["showPrice", "Show Price"],
-                    ["showSku", "Show SKU"],
-                    ["showBarcode", "Show Barcode"],
-                    ["showCode", "Show Code"],
+                    ["showStoreName", "Store Name"],
+                    ["showProductName", "Product Name"],
+                    ["showPrice", "Price"],
+                    ["showSku", "SKU"],
+                    ["showBarcode", "Barcode Symbol"],
+                    ["showCode", "Code / Numbers"],
                   ] as const).map(([key, label]) => (
                     <label
                       key={key}
-                      className="flex cursor-pointer items-center justify-between"
+                      className="flex cursor-pointer items-center justify-between text-xs text-slate-600"
                     >
-                      <span className="text-sm text-slate-600">{label}</span>
+                      <span>{label}</span>
                       <button
                         type="button"
                         role="switch"
@@ -1036,13 +1223,13 @@ export default function BarcodesPage() {
                         onClick={() =>
                           setDisplay((prev) => ({ ...prev, [key]: !prev[key] }))
                         }
-                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition ${
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition ${
                           display[key] ? "bg-emerald-500" : "bg-slate-200"
                         }`}
                       >
                         <span
-                          className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                            display[key] ? "translate-x-6" : "translate-x-1"
+                          className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
+                            display[key] ? "translate-x-4" : "translate-x-1"
                           }`}
                         />
                       </button>
@@ -1051,16 +1238,18 @@ export default function BarcodesPage() {
                 </div>
               </div>
 
-              <div className="border-t border-slate-100 pt-4">
+              {/* Reset Button */}
+              <div className="border-t border-slate-100 pt-3">
                 <button
-                  onClick={() => handleReset()}
-                  className="btn btn-secondary btn-sm w-full"
+                  type="button"
+                  onClick={handleReset}
+                  className="btn btn-secondary btn-sm w-full text-xs text-slate-500 hover:text-slate-800"
                 >
-                  Reset Barcode
+                  Reset Defaults
                 </button>
                 {confirmReset && (
-                  <p className="mt-2 text-center text-xs text-amber-600">
-                    Are you sure? Click again to confirm.
+                  <p className="mt-1 text-center text-xs text-amber-600">
+                    Click again to confirm reset
                   </p>
                 )}
               </div>

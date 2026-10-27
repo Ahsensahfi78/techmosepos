@@ -96,7 +96,7 @@ describe("saveLabelSize / loadLabelSize", () => {
 
   it("falls back to the default when nothing is stored", () => {
     expect(loadLabelSize()).toEqual({ ...DEFAULT_LABEL_SIZE });
-    expect(DEFAULT_LABEL_SIZE).toEqual({ widthMm: 50, heightMm: 30 });
+    expect(DEFAULT_LABEL_SIZE).toEqual({ widthMm: 38, heightMm: 25 });
   });
 
   it("accepts a plain '50x30' string already in storage", () => {

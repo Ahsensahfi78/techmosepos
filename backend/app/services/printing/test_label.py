@@ -82,9 +82,11 @@ def main() -> int:
     ap.add_argument("--db", type=Path, default=Path("pos.db"))
     ap.add_argument("--printer", default=DEFAULT_PRINTER)
     ap.add_argument("--store", default="TechMOS")
-    ap.add_argument("--width-mm", type=float, default=70.0)
-    ap.add_argument("--height-mm", type=float, default=50.0)
-    ap.add_argument("--gap-mm", type=float, default=2.0)
+    # The shop's roll is 38 x 25 mm with a 3 mm gap; keep the diagnostic on the
+    # same stock so its output matches the app's job.
+    ap.add_argument("--width-mm", type=float, default=38.0)
+    ap.add_argument("--height-mm", type=float, default=25.0)
+    ap.add_argument("--gap-mm", type=float, default=3.0)
     ap.add_argument("--dpi", type=int, default=203)
     ap.add_argument("--send", action="store_true", help="actually print")
     ap.add_argument("--keep", action="store_true", help="keep intermediate files")

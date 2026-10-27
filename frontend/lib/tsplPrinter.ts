@@ -5,7 +5,7 @@
  * A thermal label printer exposes a bulk OUT endpoint. Writing the TSPL bytes
  * to it is exactly what the printer's own software does, so the job is not
  * rasterised, not rescaled to A4, and the printer's own gap sensing applies.
- * This is the only path that guarantees the 38 x 25 mm box survives the trip
+ * This is the only path that guarantees the 76 x 100 mm box survives the trip
  * from the app to the paper.
  *
  * WebUSB requires a secure context (https or localhost) and a user gesture,

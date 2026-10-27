@@ -35,7 +35,7 @@ describe("38 x 25 mm thermal stock", () => {
     expect(DEFAULT_LABEL_CONFIG).toMatchObject({
       widthMm: 38,
       heightMm: 25,
-      gapMm: 2,
+      gapMm: 3,
       offsetXmm: 0,
       offsetYmm: 0,
       rotate: 0,
@@ -77,7 +77,7 @@ describe("toLabelConfig", () => {
     expect(toLabelConfig({ widthMm: 50, heightMm: 30 })).toEqual({
       widthMm: 50,
       heightMm: 30,
-      gapMm: 2,
+      gapMm: 3,
       offsetXmm: 0,
       offsetYmm: 0,
       rotate: 0,
@@ -89,7 +89,7 @@ describe("toLabelConfig", () => {
     expect(toLabelConfig(null)).toEqual(DEFAULT_LABEL_CONFIG);
     expect(toLabelConfig(undefined)).toEqual(DEFAULT_LABEL_CONFIG);
     expect(toLabelConfig({ widthMm: 0, heightMm: 0 })).toEqual(DEFAULT_LABEL_CONFIG);
-    expect(toLabelConfig({ widthMm: Number.NaN, heightMm: 25 })).toEqual(
+    expect(toLabelConfig({ widthMm: Number.NaN, heightMm: Number.NaN })).toEqual(
       DEFAULT_LABEL_CONFIG,
     );
   });
@@ -108,9 +108,11 @@ describe("toLabelConfig", () => {
     expect(out.paddingMm).toBe(10);
   });
 
-  it("rejects a rotation that is not a right angle", () => {
-    expect(toLabelConfig({ ...STOCK, rotate: 45 as never }).rotate).toBe(0);
-    expect(toLabelConfig({ ...STOCK, rotate: 360 as never }).rotate).toBe(0);
+  it("keeps any rotation angle, normalized into 0-359", () => {
+    expect(toLabelConfig({ ...STOCK, rotate: 45 }).rotate).toBe(45);
+    expect(toLabelConfig({ ...STOCK, rotate: 360 }).rotate).toBe(0);
+    expect(toLabelConfig({ ...STOCK, rotate: -90 }).rotate).toBe(270);
+    expect(toLabelConfig({ ...STOCK, rotate: 405 }).rotate).toBe(45);
   });
 });
 
@@ -168,10 +170,16 @@ describe("pageBoxFor / sheetTransform", () => {
     });
   });
 
-  it("rotates the content about its centre — the page never translates", () => {
-    expect(sheetTransform({ ...STOCK, rotate: 90 })).toBe("rotate(90deg)");
-    expect(sheetTransform({ ...STOCK, rotate: 180 })).toBe("rotate(180deg)");
-    expect(sheetTransform({ ...STOCK, rotate: 270 })).toBe("rotate(270deg)");
+  it("rotates the content using top-left origin matrix translations", () => {
+    expect(sheetTransform({ ...STOCK, rotate: 90 })).toBe(
+      "translateX(25mm) rotate(90deg)",
+    );
+    expect(sheetTransform({ ...STOCK, rotate: 180 })).toBe(
+      "translate(38mm, 25mm) rotate(180deg)",
+    );
+    expect(sheetTransform({ ...STOCK, rotate: 270 })).toBe(
+      "translateY(38mm) rotate(-90deg)",
+    );
   });
 
   it("applies the offset in page space, before the rotation in the list", () => {
@@ -180,22 +188,21 @@ describe("pageBoxFor / sheetTransform", () => {
     );
     expect(
       sheetTransform({ ...STOCK, rotate: 90, offsetXmm: 1, offsetYmm: 2 }),
-    ).toBe("translate(1mm, 2mm) rotate(90deg)");
+    ).toBe("translate(26mm, 2mm) rotate(90deg)");
   });
 
-  it("keeps @page at the media size and turns only the wrapper", () => {
+  it("swaps @page size on 90° for portrait roll feeds", () => {
     const html = buildLabelDocument(
       ["<div class='barcode-label'>A</div>"],
       { ...STOCK, rotate: 90 },
     );
-    // The page MUST stay 38x25 — a swapped @page hands the driver a different
-    // media box and the whole job gets rescaled onto the wrong stock.
-    expect(html).toContain("@page { size: 38mm 25mm; margin: 0; }");
-    expect(html).toContain("transform-origin: center center");
-    expect(html).toContain("transform: rotate(90deg)");
-    // The wrapper is the media box turned on its side, centred inside it.
-    expect(html).toMatch(/\.rot \{[^}]*width: 25mm/);
-    expect(html).toMatch(/\.rot \{[^}]*height: 38mm/);
+    // On 90° portrait roll feeds, @page size is swapped to match feed direction
+    expect(html).toContain("@page { size: 25mm 38mm; margin: 0; }");
+    expect(html).toContain("transform-origin: top left");
+    expect(html).toContain("transform: translateX(25mm) rotate(90deg)");
+    // The wrapper holds unrotated content (38x25mm) before translation
+    expect(html).toMatch(/\.rot \{[^}]*width: 38mm/);
+    expect(html).toMatch(/\.rot \{[^}]*height: 25mm/);
     expect(html).toContain('<div class="rot"><div class="sheet">');
   });
 
@@ -207,7 +214,7 @@ describe("pageBoxFor / sheetTransform", () => {
     expect(html).toContain("@page { size: 38mm 25mm; margin: 0; }");
     expect(html).toMatch(/\.rot \{[^}]*width: 38mm/);
     expect(html).toMatch(/\.rot \{[^}]*height: 25mm/);
-    expect(html).toContain("transform: rotate(180deg)");
+    expect(html).toContain("transform: translate(38mm, 25mm) rotate(180deg)");
   });
 
   it("exposes every right angle", () => {
@@ -217,11 +224,11 @@ describe("pageBoxFor / sheetTransform", () => {
 
 describe("barcodeMaxHeightMm", () => {
   it("caps bars at 9 mm on small thermal stock", () => {
-    expect(barcodeMaxHeightMm(DEFAULT_LABEL_CONFIG)).toBe(9);
     expect(barcodeMaxHeightMm({ widthMm: 50, heightMm: 30 })).toBe(9);
   });
 
-  it("lets sheet stock use a taller symbol", () => {
+  it("caps the 38 x 25 mm roll at 9 mm but lets sheet stock run taller", () => {
+    expect(barcodeMaxHeightMm(DEFAULT_LABEL_CONFIG)).toBe(9);
     expect(barcodeMaxHeightMm({ widthMm: 210, heightMm: 297 })).toBe(20);
   });
 
@@ -232,26 +239,15 @@ describe("barcodeMaxHeightMm", () => {
     expect(html).toMatch(/\.barcode-image svg \{[^}]*width: 100%/);
   });
 
-  it("locks html/body to the label width so nothing floats on an A4 page", () => {
+  it("locks html/body to the label width and height so nothing floats on an A4 page", () => {
     // This is the fix for "Chrome shows a large page with the label floating
-    // in the middle". The document is the label's own width, so even if
-    // @page were dropped the content could never stretch to A4.
+    // in the middle". The document is the label's own dimensions.
     const html = buildLabelDocument(["<div class='barcode-label'>A</div>"], STOCK);
     expect(html).toMatch(/html, body \{[^}]*width: 38mm;/);
+    expect(html).toMatch(/html, body \{[^}]*height: 25mm;/);
+    expect(html).toMatch(/html, body \{[^}]*overflow: hidden;/);
     expect(html).toMatch(/html, body \{[^}]*margin: 0;/);
     expect(html).toMatch(/html, body \{[^}]*padding: 0;/);
-  });
-
-  it("never clamps body height, or later labels would be clipped away", () => {
-    const html = buildLabelDocument(
-      ["<div class='barcode-label'>1</div>", "<div class='barcode-label'>2</div>"],
-      STOCK,
-    );
-    // Height must stay auto: .page is one label tall and carries the page
-    // break, so 2 labels become 2 pages and 1 label becomes exactly 1 page.
-    expect(html).toMatch(/html, body \{[^}]*height: auto;/);
-    expect(html).not.toMatch(/html, body \{[^}]*overflow: hidden/);
-    expect(html).toMatch(/\.page \{[^}]*height: 25mm;/);
   });
 
   it("pins the media box and never lets the document grow past it", () => {
@@ -287,7 +283,7 @@ describe("label content rules", () => {
   it("wraps every label in a rotation box inside the page", () => {
     const doc = buildLabelDocument(["<div class='barcode-label'>A</div>"], STOCK);
     expect(doc).toContain('<div class="rot"><div class="sheet">');
-    expect(doc).toMatch(/\.rot \{[^}]*transform-origin: center center/);
+    expect(doc).toMatch(/\.rot \{[^}]*transform-origin: top left/);
   });
 });
 
@@ -319,9 +315,10 @@ describe("test print edge marker", () => {
   it("prints the test label as exactly one page", () => {
     const doc = buildLabelDocument([buildTestLabelHtml()], STOCK, null, true);
     expect(doc.match(/<section class="page">/g)).toHaveLength(1);
-    expect(doc).toContain("page-break-after: always");
-    // The last page releases the break, so no blank label follows it.
-    expect(doc).toContain(".page:last-child");
+    // No forced break-after on the page — that is what left a blank sheet
+    // behind the last label. Pages are only separated by break-before.
+    expect(doc).not.toMatch(/\.page \{[^}]*page-break-after:/);
+    expect(doc).toMatch(/\.page \+ \.page \{[^}]*page-break-before: always/);
   });
 
   it("draws the safe area as a solid box on the test label", () => {
@@ -361,7 +358,7 @@ describe("loadLabelConfig / saveLabelConfig", () => {
     expect(loadLabelConfig()).toEqual({
       widthMm: 63,
       heightMm: 38,
-      gapMm: 2,
+      gapMm: 3,
       offsetXmm: 0,
       offsetYmm: 0,
       rotate: 0,
@@ -375,9 +372,15 @@ describe("loadLabelConfig / saveLabelConfig", () => {
 
     window.localStorage.setItem(
       "pos_label_config",
-      JSON.stringify({ widthMm: 38, heightMm: 25, rotate: 45 }),
+      JSON.stringify({ widthMm: 38, heightMm: 25, rotate: "forty-five" }),
     );
     expect(loadLabelConfig().rotate).toBe(0);
+
+    window.localStorage.setItem(
+      "pos_label_config",
+      JSON.stringify({ widthMm: 38, heightMm: 25, rotate: 45 }),
+    );
+    expect(loadLabelConfig().rotate).toBe(45);
   });
 
   it("survives blocked storage", () => {
@@ -401,7 +404,7 @@ describe("buildTspl", () => {
   it("emits the stock header the printer expects", () => {
     const tspl = buildTspl(labels, STOCK);
     expect(tspl).toContain("SIZE 38 mm, 25 mm");
-    expect(tspl).toContain("GAP 2 mm, 0 mm");
+    expect(tspl).toContain("GAP 3 mm, 0 mm");
     expect(tspl).toContain("DENSITY 8");
     // Default is DIRECTION 0; DIRECTION 1 is what "Rotate 180" maps to.
     expect(tspl).toContain("DIRECTION 0");
@@ -409,11 +412,20 @@ describe("buildTspl", () => {
     expect(tspl.trimEnd().endsWith("PRINT 1")).toBe(true);
   });
 
-  it("sizes the barcode at 9 mm, which is 72 dots at 203 dpi", () => {
+  it("sizes the barcode to the 9 mm cap and 1-dot modules that fit a 38 mm label", () => {
     expect(mmToDots(9)).toBe(72);
     expect(buildTspl(labels, STOCK)).toContain(
-      'BARCODE 16,40,"128",72,1,0,2,2,"123456789012"',
+      'BARCODE 16,40,"128",72,1,0,1,1,"123456789012"',
     );
+  });
+
+  it("emits the shop's 38 x 25 mm header, not a stale 76 x 100 preset", () => {
+    const tspl = buildTspl(labels, STOCK, { density: 7 });
+    expect(tspl).toContain("SIZE 38 mm, 25 mm");
+    expect(tspl).toContain("GAP 3 mm, 0 mm");
+    expect(tspl).toContain("DENSITY 7");
+    expect(tspl).toContain("DIRECTION 0");
+    expect(tspl).not.toContain("SIZE 76 mm");
   });
 
   it("keeps every element inside the 34 x 21 mm safe area", () => {

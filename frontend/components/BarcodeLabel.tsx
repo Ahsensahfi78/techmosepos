@@ -38,8 +38,8 @@ export default function BarcodeLabel({
     try {
       JsBarcode(svgRef.current, barcodeValue, {
         format: detectBarcodeFormat(barcodeValue),
-        width: 2,
-        height: 40,
+        width: 1.8,
+        height: 36,
         displayValue: false,
         margin: 0,
         background: "#ffffff",
@@ -53,8 +53,8 @@ export default function BarcodeLabel({
     try {
       JsBarcode(svgRef.current, barcodeValue, {
         format: "CODE128",
-        width: 2,
-        height: 40,
+        width: 1.8,
+        height: 36,
         displayValue: false,
         margin: 0,
         background: "#ffffff",

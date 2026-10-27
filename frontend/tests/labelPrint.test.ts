@@ -105,9 +105,12 @@ describe("buildLabelDocument", () => {
 
   it("never lets the last label push a blank page off the roll", () => {
     const html = buildLabelDocument(["<div class='barcode-label'>1</div>"], SIZE);
-    expect(html).toMatch(/\.page \{[^}]*page-break-after: always/);
-    expect(html).toMatch(/\.page:last-child \{[^}]*page-break-after: auto/);
-    expect(html).toMatch(/\.page:last-child \{[^}]*break-after: auto/);
+    // A forced break-after on the last .page is what leaves a blank sheet
+    // behind it. The stylesheet must only ever break BEFORE a later page.
+    expect(html).toMatch(/\.page \+ \.page \{[^}]*break-before: page/);
+    expect(html).toMatch(/\.page \+ \.page \{[^}]*page-break-before: always/);
+    expect(html).not.toMatch(/\.page \{[^}]*break-after:/);
+    expect(html).not.toMatch(/\.page \{[^}]*page-break-after:/);
   });
 
   it("keeps label text black on an opaque white plate", () => {
@@ -156,7 +159,7 @@ describe("buildLabelDocument", () => {
 describe("labelSizeToPx", () => {
   it("converts mm to CSS px at 96dpi", () => {
     expect(labelSizeToPx(SIZE)).toEqual({ width: 189, height: 113 });
-    expect(labelSizeToPx(DEFAULT_LABEL_SIZE)).toEqual({ width: 189, height: 113 });
+    expect(labelSizeToPx(DEFAULT_LABEL_SIZE)).toEqual({ width: 144, height: 94 });
   });
 
   it("never returns a zero-sized frame", () => {

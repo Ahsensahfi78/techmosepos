@@ -13,7 +13,7 @@ export interface LabelSize {
  * Everything the printer needs to place one label correctly.
  *
  * `widthMm`/`heightMm` are the *media* size — the exact box the driver is
- * configured for (38 x 25 mm on the XP-365B stock). `paddingMm` is the safe
+ * configured for (38 x 25 mm on the shop's stock). `paddingMm` is the safe
  * area inset, so a 38 x 25 label with the default 2 mm inset keeps all
  * content inside 34 x 21 mm.
  */
@@ -29,11 +29,16 @@ export interface LabelConfig extends LabelSize {
   paddingMm: number;
 }
 
-export type LabelRotation = 0 | 90 | 180 | 270;
+export type LabelRotation = number;
 
 export const LABEL_ROTATIONS: LabelRotation[] = [0, 90, 180, 270];
 
-export const DEFAULT_LABEL_SIZE: LabelSize = { widthMm: 50, heightMm: 30 };
+export function normRotation(angle: number): number {
+  if (!Number.isFinite(angle)) return 0;
+  return ((angle % 360) + 360) % 360;
+}
+
+export const DEFAULT_LABEL_SIZE: LabelSize = { widthMm: 38, heightMm: 25 };
 export const LABEL_SIZE_MIN_MM = 10;
 export const LABEL_SIZE_MAX_MM = 300;
 
@@ -46,7 +51,7 @@ export const LABEL_PADDING_MAX_MM = 10;
 
 /**
  * The 38 x 25 mm thermal stock the shop actually runs: 203 dpi puts that at
- * roughly 304 x 200 dots, with a 2 mm gap the printer measures itself.
+ * roughly 304 x 200 dots, with a 3 mm gap the printer measures itself.
  *
  * The 2 mm inset leaves a 34 x 21 mm safe area, which is what the layout
  * below is budgeted against.
@@ -54,7 +59,7 @@ export const LABEL_PADDING_MAX_MM = 10;
 export const DEFAULT_LABEL_CONFIG: LabelConfig = {
   widthMm: 38,
   heightMm: 25,
-  gapMm: 2,
+  gapMm: 3,
   offsetXmm: 0,
   offsetYmm: 0,
   rotate: 0,
@@ -161,7 +166,7 @@ function clampNumber(value: number, low: number, high: number, fallback: number)
 }
 
 export function isLabelRotation(value: unknown): value is LabelRotation {
-  return value === 0 || value === 90 || value === 180 || value === 270;
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 /**
@@ -201,7 +206,7 @@ export function toLabelConfig(
         DEFAULT_LABEL_CONFIG.offsetYmm,
       ),
     ),
-    rotate: isLabelRotation(base.rotate) ? base.rotate : 0,
+    rotate: normRotation(base.rotate),
     paddingMm: round2(
       clampNumber(
         base.paddingMm,
@@ -213,21 +218,45 @@ export function toLabelConfig(
   };
 }
 
-/** 90° and 270° turn the media box on its side, so the page is swapped. */
+/**
+ * The rotation wrapper's own box.
+ *
+ * For 0/90/180/270 it is the media box (turned on its side at quarter turns)
+ * so rotating it about its centre lands it exactly back inside the media box.
+ * For any other angle it is the rotated bounding box of the media box, so the
+ * wrapper stays centred and the fit scale in sheetTransform keeps everything
+ * inside the fixed page instead of spilling past a corner.
+ */
+/**
+ * The rotation wrapper's own box.
+ *
+ * For 0/90/180/270 it is the media box (turned on its side at quarter turns)
+ * so rotating it about its centre lands it exactly back inside the media box.
+ * For any other angle it is the rotated bounding box of the media box, so the
+ * wrapper stays centred and the fit scale in sheetTransform keeps everything
+ * inside the fixed page instead of spilling past a corner.
+ */
 export function pageBoxFor(config: LabelConfig | LabelSize): LabelSize {
   const c = toLabelConfig(config);
-  const swapped = c.rotate === 90 || c.rotate === 270;
+  const angle = normRotation(c.rotate);
+  if (angle % 90 === 0) {
+    const swapped = angle === 90 || angle === 270;
+    return {
+      widthMm: swapped ? c.heightMm : c.widthMm,
+      heightMm: swapped ? c.widthMm : c.heightMm,
+    };
+  }
+  const rad = (angle * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
   return {
-    widthMm: swapped ? c.heightMm : c.widthMm,
-    heightMm: swapped ? c.widthMm : c.heightMm,
+    widthMm: round2(c.widthMm * cos + c.heightMm * sin),
+    heightMm: round2(c.widthMm * sin + c.heightMm * cos),
   };
 }
 
 /**
- * The media box — the physical label stock. This is what `@page` is sized to
- * and it NEVER changes with rotation: turning the content 180° (or 90°) must
- * not hand the printer a different page, or the driver rescales the whole job
- * and the barcode lands off the edge of the label.
+ * The physical media box — the sticker dimensions on the liner roll.
  */
 export function mediaBoxFor(config: LabelConfig | LabelSize): LabelSize {
   const c = toLabelConfig(config);
@@ -235,16 +264,40 @@ export function mediaBoxFor(config: LabelConfig | LabelSize): LabelSize {
 }
 
 /**
+ * Safe print height to protect against subpixel rounding errors.
+ * At 96 DPI, 25mm = 94.488px. If the browser rounds to 95px (25.135mm),
+ * Chrome creates a phantom 2nd page break, causing thermal printers to feed
+ * an empty label. Clamping small stock by 0.2mm ensures content strictly
+ * fits within the physical label without creating extra blank sheets.
+ */
+export function safeHeightMm(heightMm: number): number {
+  return round2(heightMm);
+}
+
+/**
+ * The page size requested from the printer driver via @page.
+ * For 90° and 270° rotations on portrait-fed thermal rolls (where width > height
+ * can trigger Windows landscape auto-detection), swapping dimensions guarantees
+ * the driver receives a page matching the portrait feed travel direction.
+ */
+export function printPageSizeFor(config: LabelConfig | LabelSize): LabelSize {
+  const c = toLabelConfig(config);
+  const angle = normRotation(c.rotate);
+  const swapped = angle === 90 || angle === 270;
+  const h = safeHeightMm(c.heightMm);
+  const w = c.widthMm;
+  return {
+    widthMm: swapped ? h : w,
+    heightMm: swapped ? w : h,
+  };
+}
+
+/**
  * The rotation wrapper's own box.
- *
- * For 0°/180° it is the media box. For 90°/270° it is the media box turned on
- * its side, so rotating it about its centre lands it exactly back inside the
- * media box instead of hanging off the edge.
  */
 export function rotatedBoxFor(config: LabelConfig | LabelSize): LabelSize {
   return pageBoxFor(config);
 }
-
 
 /** The box content may occupy — media size minus the safe-area inset. */
 export function safeAreaFor(config: LabelConfig | LabelSize): LabelSize {
@@ -256,26 +309,100 @@ export function safeAreaFor(config: LabelConfig | LabelSize): LabelSize {
 }
 
 /**
+ * Top-left origin rotation and translation CSS.
+ * For cardinal angles (0, 90, 180, 270), exact coordinates preven/**
+ * Top-left origin rotation and translation CSS.
+ * For cardinal angles (0, 90, 180, 270), exact coordinates prevent any clipping
+ * from container overflow:hidden, while non-cardinal angles are centered and scaled.
+ */
+export function getRotationStyle(config: LabelConfig | LabelSize): {
+  transform: string;
+  transformOrigin: string;
+  widthMm: number;
+  heightMm: number;
+} {
+  const c = toLabelConfig(config);
+  const angle = normRotation(c.rotate);
+  const w = c.widthMm;
+  const h = c.heightMm;
+  const ox = c.offsetXmm;
+  const oy = c.offsetYmm;
+
+  if (angle === 0) {
+    return {
+      transform: ox !== 0 || oy !== 0 ? `translate(${ox}mm, ${oy}mm)` : "none",
+      transformOrigin: "top left",
+      widthMm: w,
+      heightMm: h,
+    };
+  }
+  if (angle === 90) {
+    const tx = round2(h + ox);
+    const ty = round2(oy);
+    const transform =
+      ox === 0 && oy === 0
+        ? `translateX(${h}mm) rotate(90deg)`
+        : ty === 0
+          ? `translateX(${tx}mm) rotate(90deg)`
+          : `translate(${tx}mm, ${ty}mm) rotate(90deg)`;
+    return {
+      transform,
+      transformOrigin: "top left",
+      widthMm: w,
+      heightMm: h,
+    };
+  }
+  if (angle === 180) {
+    const tx = round2(w + ox);
+    const ty = round2(h + oy);
+    return {
+      transform: `translate(${tx}mm, ${ty}mm) rotate(180deg)`,
+      transformOrigin: "top left",
+      widthMm: w,
+      heightMm: h,
+    };
+  }
+  if (angle === 270) {
+    const tx = round2(ox);
+    const ty = round2(w + oy);
+    const transform =
+      ox === 0 && oy === 0
+        ? `translateY(${w}mm) rotate(-90deg)`
+        : tx === 0
+          ? `translateY(${ty}mm) rotate(-90deg)`
+          : `translate(${tx}mm, ${ty}mm) rotate(-90deg)`;
+    return {
+      transform,
+      transformOrigin: "top left",
+      widthMm: w,
+      heightMm: h,
+    };
+  }
+
+  // Non-cardinal angles
+  const rot = pageBoxFor(c);
+  const scale = Math.min(c.widthMm / rot.widthMm, c.heightMm / rot.heightMm, 1);
+  const parts: string[] = [];
+  if (ox !== 0 || oy !== 0) parts.push(`translate(${ox}mm, ${oy}mm)`);
+  parts.push(`rotate(${angle}deg)`);
+  if (scale < 1) parts.push(`scale(${round2(scale)})`);
+
+  return {
+    transform: parts.join(" "),
+    transformOrigin: "center center",
+    widthMm: rot.widthMm,
+    heightMm: rot.heightMm,
+  };
+}
+
+/**
  * Transform applied to the rotation wrapper.
- *
- * The wrapper is centred inside the media box, so a plain
- * `transform: rotate(Ndeg)` with `transform-origin: center` is enough — the
- * page itself never moves. The offset is prepended, which means it is applied
- * *after* the rotation and therefore shifts the content in page space without
- * changing the page size.
  */
 export function sheetTransform(config: LabelConfig | LabelSize): string {
   const c = toLabelConfig(config);
-  const parts: string[] = [];
-  if (c.offsetXmm !== 0 || c.offsetYmm !== 0) {
-    parts.push(`translate(${c.offsetXmm}mm, ${c.offsetYmm}mm)`);
-  }
-  if (c.rotate !== 0) {
-    parts.push(`rotate(${c.rotate}deg)`);
-  }
-  return parts.join(" ");
+  const style = getRotationStyle(c);
+  return style.transform === "none" ? "" : style.transform;
 }
-
 
 /** Bar height cap: ~9 mm on small thermal stock, larger on sheet stock. */
 export function barcodeMaxHeightMm(config: LabelConfig | LabelSize): number {
@@ -337,84 +464,84 @@ export function labelSizeToPx(size: LabelSize): { width: number; height: number 
   };
 }
 
-function labelStyles(config: LabelConfig): string {
-  const media = mediaBoxFor(config);
-  const rot = rotatedBoxFor(config);
-  const mw = `${media.widthMm}mm`;
-  const mh = `${media.heightMm}mm`;
-  const halfW = round2(rot.widthMm / 2);
-  const halfH = round2(rot.heightMm / 2);
-  const transform = sheetTransform(config);
-  const barcodeMax = barcodeMaxHeightMm(config);
+export function labelStyles(config: LabelConfig, debugOutline = false): string {
+  const c = toLabelConfig(config);
+  const pageSize = printPageSizeFor(c);
+  const rotStyle = getRotationStyle(c);
+  const pw = `${pageSize.widthMm}mm`;
+  const ph = `${pageSize.heightMm}mm`;
+  const rw = `${rotStyle.widthMm}mm`;
+  const rh = `${rotStyle.heightMm}mm`;
+  const barcodeMax = barcodeMaxHeightMm(c);
+
   return `
-/* The page IS the label stock. It is sized from the media box only — never
-   from the rotation — so the printer always receives 38x25mm (or whatever the
-   roll is) no matter which way the content is turned. margin:0 is what stops
-   Chrome falling back to its A4/Letter default. */
-@page { size: ${mw} ${mh}; margin: 0; }
+/* Page sized dynamically from settings. Swapped (25mm x 38mm) on 90/270 for portrait roll feeds. */
+@page { size: ${pw} ${ph}; margin: 0; }
 
 html, body {
   margin: 0;
   padding: 0;
-  width: ${mw};
-  /* Deliberately auto, NOT the label height. Each .page below is exactly one
-     label tall and releases its page break when it is the last one, so a
-     single label is exactly one page and N labels are exactly N pages.
-     Clamping body height to one label (or clipping it with overflow:hidden)
-     is what silently drops every label after the first. */
-  height: auto;
-  overflow: visible;
+  width: ${pw};
+  height: ${ph};
+  overflow: hidden;
   background: #fff;
   color: #000;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
 
-/* .page IS the media box: exactly one label per page, never tiled onto the
-   next one, never leaving a blank label behind. It clips, so content that
-   somehow escaped the safe area still cannot spill onto the neighbouring
-   label on the roll. */
+/* Fixed label box: exactly one label per page */
+.label {
+  box-sizing: border-box;
+  position: relative;
+  width: ${pw};
+  height: ${ph};
+  overflow: hidden;
+  break-after: page;
+  page-break-after: always;
+  background: #fff;
+  color: #000;
+  display: block;
+}
+
+/* Last label never breaks after, so exactly 1 page prints for qty=1 and N pages for qty=N */
+.label:last-child {
+  break-after: auto !important;
+  page-break-after: auto !important;
+}
+
 .page {
   box-sizing: border-box;
   position: relative;
-  width: ${mw};
-  height: ${mh};
+  width: ${pw};
+  height: ${ph};
   overflow: hidden;
   background: #fff;
   color: #000;
   display: block;
-  break-inside: avoid;
-  page-break-inside: avoid;
-  break-after: page;
-  page-break-after: always;
 }
 
-.page:last-child {
-  break-after: auto;
-  page-break-after: auto;
+.page + .page {
+  break-before: page;
+  page-break-before: always;
 }
 
-/* The rotation wrapper. It is centred inside the media box, so a plain
-   rotate() about its own centre keeps it inside the label. For 90/270 it is
-   the media box turned on its side (height x width) — that swap is what
-   makes a quarter-turn still fit inside 38x25mm instead of overflowing. */
+/* Rotation wrapper: top-left origin coordinates for 0/90/180/270 so nothing gets clipped */
 .rot {
   box-sizing: border-box;
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: ${rot.widthMm === media.widthMm ? mw : `${rot.widthMm}mm`};
-  height: ${rot.heightMm === media.heightMm ? mh : `${rot.heightMm}mm`};
-  margin-left: -${halfW}mm;
-  margin-top: -${halfH}mm;
-  transform-origin: center center;
-  ${transform ? `transform: ${transform};` : ""}
+  left: 0;
+  top: 0;
+  width: ${rw};
+  height: ${rh};
+  transform-origin: ${rotStyle.transformOrigin};
+  ${rotStyle.transform !== "none" ? `transform: ${rotStyle.transform};` : ""}
   overflow: hidden;
   background: #fff;
   color: #000;
 }
 
-/* The content box: the wrapper minus the safe-area inset. */
+/* Content box inside wrapper: padded by safe-area inset (default 2mm) */
 .sheet {
   box-sizing: border-box;
   width: 100%;
@@ -427,17 +554,17 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   text-align: center;
 }
 
-
-/* Sheet stock (A4 / A5 / inch labels): one .page holds the whole pre-rendered
-   grid, so a sheet still prints as exactly one sheet. */
-.page.page-sheet {
+/* Sheet stock (A4 / A5 / inch labels) */
+.page.page-sheet, .label.page-sheet {
   display: block;
   padding: 2mm;
   overflow: visible;
+  height: auto;
+  max-height: none;
 }
 
 .page-sheet .barcode-grid {
@@ -451,10 +578,7 @@ html, body {
   border-radius: 0 !important;
 }
 
-/* Dashed outline of the media edge, printed only on a test label so you can
-   see whether the content really sits inside the label. It is inset by half
-   its own thickness so all four sides are painted inside the page box and
-   nothing gets clipped by .page's overflow:hidden. */
+/* Dashed outline of the media edge on test label */
 .test-edge .page::after {
   content: "";
   position: absolute;
@@ -464,14 +588,32 @@ html, body {
   pointer-events: none;
 }
 
+.test-edge .label::after {
+  content: "";
+  position: absolute;
+  inset: 0.35mm;
+  border: 0.35mm dashed #000;
+  box-sizing: border-box;
+  pointer-events: none;
+}
 
-/* The iframe carries no Tailwind, so every label class is styled here.
-   All sizes are in pt (1pt = 1.33px) to stay readable on a 203 dpi head. */
+/* Debug outline: visible on screen only, never on printed output */
+@media screen {
+  ${debugOutline ? `
+  .page, .label { outline: 0.3mm solid #ef4444 !important; }
+  .sheet { outline: 0.25mm dashed #3b82f6 !important; }
+  ` : ""}
+}
+@media print {
+  .page, .label, .sheet { outline: none !important; }
+}
+
+/* Barcode label elements strictly budgeted inside safe area (34x21mm) */
 .barcode-label {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   text-align: center;
   width: 100%;
   height: 100%;
@@ -479,21 +621,21 @@ html, body {
   color: #000;
   background: #fff;
   font-family: Arial, Helvetica, "Liberation Sans", sans-serif;
-  line-height: 1.15;
+  line-height: 1.1;
   overflow: hidden;
   box-sizing: border-box;
   --barcode-max-h: ${barcodeMax}mm;
 }
 
-/* One line only: a long product name is ellipsised rather than pushing the
-   barcode off the bottom of a 25 mm label. */
 .barcode-product-name {
   font-size: 8pt;
   font-weight: 700;
+  line-height: 1.1;
   max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  margin: 0;
 }
 
 .barcode-store-name {
@@ -501,22 +643,22 @@ html, body {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  line-height: 1.1;
   max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  margin: 0;
 }
 
-/* Bars keep their aspect ratio and are capped at ~9 mm on thermal stock, so
-   a short Code128 symbol can never grow tall enough to collide with the
-   price line. max-width keeps them inside the safe area. */
 .barcode-image {
   width: 100%;
-  margin: 0.6mm 0;
+  margin: 0.4mm 0;
   background: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .barcode-image svg {
@@ -524,38 +666,39 @@ html, body {
   width: 100%;
   height: auto;
   max-width: 100%;
-  max-height: var(--barcode-max-h, 9mm);
+  max-height: var(--barcode-max-h, 9.5mm);
   background: #fff;
   shape-rendering: crispEdges;
 }
-
 
 .barcode-code {
   font-family: "Courier New", Courier, monospace;
   font-size: 8pt;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
   max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  margin: 0;
 }
 
 .barcode-sku {
   font-size: 7pt;
+  line-height: 1.1;
 }
 
 .barcode-price {
   font-size: 9pt;
-  font-weight: 700;
+  font-weight: 800;
+  line-height: 1.1;
   max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
+  margin: 0;
 }
 
-/* Test label: the solid box marks the safe area, the dashed outline drawn by
-   .test-edge marks the media edge. If content touches the dashed line the
-   inset is too small. */
 .barcode-label.barcode-test {
   border: 0.5mm solid #000;
   border-radius: 0;
@@ -573,19 +716,29 @@ html, body {
 /**
  * A standalone, Tailwind-free HTML document for the label iframe.
  *
- * - Roll / single-label stock: `labelHtml` holds one entry per label and each
- *   entry becomes its own `.page`, so the printed page count equals the label
+ * - Roll / single-label stock: labelHtml holds one entry per label and each
+ *   entry becomes its own .label.page, so the printed page count equals the label
  *   count with no blank page at the end.
- * - Sheet stock: pass `sheetHtml` (the pre-rendered `.barcode-grid`) instead
- *   and the whole grid becomes a single `.page`.
+ * - Sheet stock: pass sheetHtml (the pre-rendered .barcode-grid) instead
+ *   and the whole grid becomes a single .page.
  */
 export function buildLabelDocument(
   labelHtml: string[],
   input: LabelConfig | LabelSize,
   sheetHtml?: string | null,
   testMode?: boolean,
+  debugOutline?: boolean,
 ): string {
   const config = toLabelConfig(input);
+  const pageSize = printPageSizeFor(config);
+  const widthPt = (pageSize.widthMm * 72) / 25.4;
+  const heightPt = (pageSize.heightMm * 72) / 25.4;
+  const pageLog = `[labelPrint] Page size: ${pageSize.widthMm} x ${pageSize.heightMm} mm / ${widthPt.toFixed(1)} x ${heightPt.toFixed(1)} pt`;
+  try {
+    console.log(pageLog);
+  } catch {
+    /* ignore */
+  }
   const pages = sheetHtml
     ? `<section class="page page-sheet">${sheetHtml}</section>`
     : labelHtml
@@ -593,10 +746,12 @@ export function buildLabelDocument(
           (html) =>
             `<section class="page"><div class="rot"><div class="sheet">${html}</div></div></section>`,
         )
-        .join("\n");
+        .join(""); // Note: empty string, NO \n whitespace text node!
   return (
     `<!doctype html><html><head><meta charset="utf-8">` +
-    `<style>${labelStyles(config)}</style></head>` +
+    `<style>${labelStyles(config, debugOutline)}</style>` +
+    `<script>console.log(${JSON.stringify(pageLog)});</script>` +
+    `</head>` +
     `<body${testMode ? ' class="test-edge"' : ""}>` +
     pages +
     `</body></html>`
@@ -625,6 +780,9 @@ export function buildTestLabelHtml(): string {
  * A browser cannot open a raw port, so this builds the job and hands it over
  * as a .tspl file. Send it with the printer's own tool, or with the
  * `raw.ps1` helper shipped in backend/app/services/printing/scripts/.
+ *
+ * The default job is the shop's 38 x 25 mm roll: SIZE 38 mm, 25 mm with
+ * GAP 3 mm, 0 mm.
  */
 export const TSPL_DPI = 203;
 
@@ -701,6 +859,16 @@ export function buildTspl(
   const clampY = (y: number, height: number) =>
     Math.min(Math.max(y, minY), Math.max(minY, maxY - height));
 
+  // Code128 width in dots = (11 * dataChars + 35) modules x the module width.
+  // Pick the widest module (1 or 2 dots) that still fits the safe band, so a
+  // 12-digit code shrinks to 1-dot modules on a 38 mm label instead of
+  // overrunning the right edge, and only widens on larger stock.
+  const barcodeModule = (chars: number) => {
+    const modules = 11 * chars + 35;
+    const available = Math.max(1, maxX - minX);
+    return Math.min(2, Math.max(1, Math.floor(available / modules)));
+  };
+
   // TSPL built-in fonts: "1" = 8x12, "2" = 12x20, "3" = 16x24 dots.
   const NAME_FONT = { id: "2", h: 20 };
   const CODE_FONT = { id: "1", h: 12 };
@@ -740,8 +908,9 @@ export function buildTspl(
     let codeY = 0;
     if (code) {
       codeY = clampY(Math.max(y + 4, Math.round(mediaH * 0.16)), barcodeH);
+      const module = barcodeModule(code.length);
       lines.push(
-        `BARCODE ${padX},${codeY},"128",${barcodeH},1,0,2,2,"${code}"`,
+        `BARCODE ${padX},${codeY},"128",${barcodeH},1,0,${module},${module},"${code}"`,
       );
       y = codeY + barcodeH + 4;
       const codeYText = clampY(y, CODE_FONT.h);
@@ -802,11 +971,16 @@ function waitForRender(
     doc.readyState === "complete" &&
     svgs.every((svg) => svg.childElementCount > 0);
   if (ready || framesLeft <= 0) {
-    done();
+    if (doc.fonts && doc.fonts.ready) {
+      doc.fonts.ready.then(() => done()).catch(() => done());
+    } else {
+      done();
+    }
     return;
   }
   requestAnimationFrame(() => waitForRender(doc, framesLeft - 1, done));
 }
+
 /**
  * Open a real top-level window for the print job.
  *
@@ -850,9 +1024,8 @@ function printLabelDocument(
 
   document.getElementById(IFRAME_ID)?.remove();
 
-  // Always the MEDIA box (38x25mm on the shop's stock). Rotation is applied
-  // to the inner .rot wrapper, so the frame and @page never disagree.
-  const box = labelSizeToPx(mediaBoxFor(input));
+  // Match the frame/popup to the exact page size passed to @page
+  const box = labelSizeToPx(printPageSizeFor(input));
 
   let target: Window | null = null;
   let doc: Document | null = null;
@@ -919,13 +1092,14 @@ function printLabelDocument(
     };
   }
 
+  let hasPrinted = false;
   const submit = () => {
     waitForRender(doc as Document, 240, () => {
       requestAnimationFrame(() => {
-        if (!target) {
-          fail("print window unavailable");
+        if (!target || hasPrinted) {
           return;
         }
+        hasPrinted = true;
         try {
           target.focus();
           target.print();
@@ -959,6 +1133,7 @@ export function printLabels(
   input: LabelConfig | LabelSize,
   onError?: (m: string) => void,
   sheetHtml?: string | null,
+  debugOutline?: boolean,
 ): boolean {
   const config = toLabelConfig(input);
   const nodes = Array.from(
@@ -970,7 +1145,13 @@ export function printLabels(
     : nodes.map((node) => node.outerHTML);
 
   return printLabelDocument(
-    buildLabelDocument(labelHtml, config, isTestFallback ? null : sheetHtml, isTestFallback),
+    buildLabelDocument(
+      labelHtml,
+      config,
+      isTestFallback ? null : sheetHtml,
+      isTestFallback,
+      debugOutline,
+    ),
     config,
     {
       onError,
@@ -980,8 +1161,8 @@ export function printLabels(
             if (!svg) return;
             JsBarcode(svg, "TEST-0001", {
               format: "CODE128",
-              width: 2,
-              height: 40,
+              width: 1.8,
+              height: 36,
               displayValue: false,
               margin: 0,
               background: "#ffffff",

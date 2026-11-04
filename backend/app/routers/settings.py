@@ -17,7 +17,7 @@ DEFAULT_SETTINGS = {
     # Receipt / invoice details (header block shown on printed receipts).
     # Empty string = the line is omitted from the receipt rather than blank.
     "store_address": "",
-    "store_phone": "",
+    "store_phone": "0752246378",
     "store_email": "",
     "store_logo": "",
     # Roll width of the printed receipt in millimetres (clamped to 58–80).

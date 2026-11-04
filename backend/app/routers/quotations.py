@@ -133,6 +133,8 @@ def update_quotation_status(
 ):
     quotation = quotation_service._get_quotation(db, quotation_id)
     if quotation.status == models.QuotationStatus.CONVERTED.value:
+        if data.status == models.QuotationStatus.CONVERTED.value:
+            return _out(quotation)
         raise HTTPException(status_code=400, detail="Converted quotations cannot change status")
     quotation.status = data.status
     db.commit()
@@ -147,42 +149,51 @@ def update_quotation_status(
     return _out(quotation)
 
 
-@router.post("/{quotation_id}/convert", response_model=schemas.SaleOut, status_code=201)
+@router.post("/{quotation_id}/convert", response_model=schemas.SaleOut, status_code=200)
 async def convert_quotation(
     quotation_id: int,
     data: schemas.QuotationConvertIn,
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("quotation.manage")),
 ):
-    sale = quotation_service.convert_quotation(
+    sale, already_converted = quotation_service.convert_quotation(
         db,
         quotation_id,
         payment_method=data.payment_method,
         paid=data.paid,
         user_id=current.id,
     )
-    for item in sale.items:
-        if item.product is None:
-            continue
-        await manager.broadcast(
-            {
-                "type": "stock_update",
-                "product": {
-                    "id": item.product.id,
-                    "name": item.product.name,
-                    "price": item.product.price,
-                    "stock": item.product.stock,
-                    "category": item.product.category,
-                },
-            }
+    if not already_converted:
+        for item in sale.items:
+            if item.product is None:
+                continue
+            await manager.broadcast(
+                {
+                    "type": "stock_update",
+                    "product": {
+                        "id": item.product.id,
+                        "name": item.product.name,
+                        "price": item.product.price,
+                        "stock": item.product.stock,
+                        "category": item.product.category,
+                    },
+                }
+            )
+        AuditLogRepository(db).log(
+            action="quotation.convert",
+            entity_type="quotation",
+            entity_id=quotation_id,
+            user_id=current.id,
+            details=f"Quotation #{quotation_id} converted to sale #{sale.id}",
         )
-    AuditLogRepository(db).log(
-        action="quotation.convert",
-        entity_type="quotation",
-        entity_id=quotation_id,
-        user_id=current.id,
-        details=f"Quotation #{quotation_id} converted to sale #{sale.id}",
-    )
+    else:
+        AuditLogRepository(db).log(
+            action="quotation.convert_repeat",
+            entity_type="quotation",
+            entity_id=quotation_id,
+            user_id=current.id,
+            details=f"Quotation #{quotation_id} already converted; returned existing sale #{sale.id}",
+        )
     from .sales import _sale_out
 
     return _sale_out(sale)

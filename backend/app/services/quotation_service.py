@@ -208,10 +208,27 @@ def convert_quotation(
     payment_method: str,
     paid: float,
     user_id: int | None = None,
-) -> models.Sale:
+) -> tuple[models.Sale, bool]:
     quotation = _get_quotation(db, quotation_id)
-    if quotation.status == models.QuotationStatus.CONVERTED.value:
+    # Server-side validation: If already converted, return existing sale idempotently without error
+    if quotation.status == models.QuotationStatus.CONVERTED.value or quotation.converted_sale_id:
+        if quotation.converted_sale_id:
+            existing_sale = db.get(models.Sale, quotation.converted_sale_id)
+            if existing_sale:
+                return existing_sale, True
+        # If converted_sale_id is missing, fallback to last sale for this customer
+        fallback_sale = (
+            db.query(models.Sale)
+            .filter(models.Sale.customer_id == quotation.customer_id)
+            .order_by(models.Sale.id.desc())
+            .first()
+        )
+        if fallback_sale:
+            quotation.converted_sale_id = fallback_sale.id
+            db.commit()
+            return fallback_sale, True
         raise HTTPException(status_code=400, detail="Quotation is already converted")
+
     if quotation.status == models.QuotationStatus.CANCELLED.value:
         raise HTTPException(status_code=400, detail="Cannot convert a cancelled quotation")
 
@@ -253,7 +270,8 @@ def convert_quotation(
     quotation.status = models.QuotationStatus.CONVERTED.value
     quotation.converted_sale_id = sale.id
     db.commit()
-    return sale
+    db.refresh(quotation)
+    return sale, False
 
 
 def list_quotations(

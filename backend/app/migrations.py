@@ -290,7 +290,7 @@ def _seed_master_data(engine: Engine) -> None:
                 ("receipt_footer", "Thank you for your purchase!\nReturn policy: Items eligible for return within 3 days with receipt."),
                 ("low_stock_threshold", "5"),
                 ("store_address", ""),
-                ("store_phone", ""),
+                ("store_phone", "0752246378"),
                 ("store_email", ""),
                 ("store_logo", ""),
                 ("receipt_width_mm", "80"),

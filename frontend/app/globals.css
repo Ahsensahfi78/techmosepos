@@ -221,8 +221,10 @@ body {
   --receipt-rotate: 0deg;
 }
 
-/* Receipt is rendered in a portal directly under <body>, hidden on screen. */
-#print-receipt {
+/* Receipt, quotation & repair are rendered in a portal directly under <body>, hidden on screen. */
+#print-receipt,
+#print-quotation,
+#print-repair {
   display: none;
 }
 
@@ -424,6 +426,7 @@ body {
     min-height: 0 !important;
     margin: 0;
     padding: 0;
+    overflow: visible !important;
     background: #fff !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -450,7 +453,11 @@ body {
   .print-area,
   .print-area *,
   #print-receipt,
-  #print-receipt * {
+  #print-receipt *,
+  #print-quotation,
+  #print-quotation *,
+  #print-repair,
+  #print-repair * {
     visibility: visible !important;
   }
 
@@ -461,6 +468,12 @@ body {
     margin: 0;
     padding: 0;
     background: #fff;
+  }
+
+  body > #print-receipt,
+  body > #print-quotation,
+  body > #print-repair {
+    display: block !important;
   }
 
   /* ── Receipt mode (#print-receipt portal) ──────────────────────────── */
@@ -477,6 +490,40 @@ body {
     padding: 0;
     box-sizing: border-box;
     background: #fff;
+  }
+
+  /* ── Quotation portal (#print-quotation) ────────────────────────────── */
+  body:has(#print-quotation) {
+    width: var(--quotation-page-width, 100%);
+    height: auto;
+  }
+
+  body:has(#print-quotation) > #print-quotation {
+    display: block !important;
+    width: var(--quotation-page-width, 100%);
+    height: auto;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  /* ── Repair portal (#print-repair) ─────────────────────────────────── */
+  body:has(#print-repair) {
+    width: var(--repair-page-width, 100%);
+    height: auto;
+  }
+
+  body:has(#print-repair) > #print-repair {
+    display: block !important;
+    width: var(--repair-page-width, 100%);
+    height: auto;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    background: #fff !important;
+    color: #000 !important;
   }
 
   body:has(#print-receipt) #print-receipt .receipt {

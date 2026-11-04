@@ -297,21 +297,49 @@ export default function QuotationsPage() {
 
   async function submitConvert(e: React.FormEvent) {
     e.preventDefault();
-    if (!convertQ) return;
+    if (!convertQ || converting) return;
+    if (convertQ.status === "converted" || convertQ.converted_sale_id) {
+      toast(`Quotation ${convertQ.quotation_number} is already converted to an invoice`, "info");
+      setConvertQ(null);
+      return;
+    }
     setConverting(true);
     setConvertError("");
     try {
-      await api.quotations.convert(convertQ.id, {
+      const sale = await api.quotations.convert(convertQ.id, {
         payment_method: convertMethod,
         paid: Number(convertPaid) || 0,
       });
-      toast(`Quotation ${convertQ.quotation_number} converted to Invoice sale!`, "success");
+
+      // Optimistically update local quotation list immediately
+      setQuotations((prev) =>
+        prev.map((item) =>
+          item.id === convertQ.id
+            ? { ...item, status: "converted", converted_sale_id: sale.id }
+            : item
+        )
+      );
+
+      toast(`Quotation ${convertQ.quotation_number} converted to Invoice #${sale.id}!`, "success");
       setConvertQ(null);
-      loadQuotations();
+      await loadQuotations();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Conversion failed";
-      setConvertError(msg);
-      toast(msg, "error");
+      if (msg.toLowerCase().includes("already converted")) {
+        setQuotations((prev) =>
+          prev.map((item) =>
+            item.id === convertQ.id
+              ? { ...item, status: "converted" }
+              : item
+          )
+        );
+        toast(`Quotation ${convertQ.quotation_number} is already converted to an invoice`, "info");
+        setConvertQ(null);
+        await loadQuotations();
+      } else {
+        setConvertError(msg);
+        toast(msg, "error");
+      }
     } finally {
       setConverting(false);
     }
@@ -441,29 +469,42 @@ export default function QuotationsPage() {
                       </button>
 
                       {/* Edit button */}
-                      {canManage && q.status !== "converted" && (
+                      {canManage && q.status !== "converted" && !q.converted_sale_id && (
                         <button
                           type="button"
+                          disabled={converting}
                           onClick={() => handleOpenEdit(q)}
-                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 transition shadow-sm"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 transition shadow-sm disabled:opacity-50"
                         >
                           Edit
                         </button>
                       )}
 
-                      {/* Convert to Sale */}
-                      {canManage && q.status !== "converted" && q.status !== "cancelled" && (
+                      {/* Convert to Sale or Already Invoiced Badge */}
+                      {q.status === "converted" || q.converted_sale_id ? (
+                        <span
+                          title={`Converted to Invoice #${q.converted_sale_id || ""}`}
+                          className="inline-flex items-center gap-1 rounded-lg bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-700 border border-purple-200"
+                        >
+                          <span>✓ Invoiced</span>
+                          {q.converted_sale_id && (
+                            <span className="font-mono text-[10px]">#{q.converted_sale_id}</span>
+                          )}
+                        </span>
+                      ) : canManage && q.status !== "cancelled" ? (
                         <button
                           type="button"
+                          disabled={converting}
                           onClick={() => {
+                            if (converting) return;
                             setConvertQ(q);
                             setConvertPaid(String(q.total));
                           }}
-                          className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700 transition shadow-sm"
+                          className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Invoice ⚡
                         </button>
-                      )}
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -623,11 +664,25 @@ export default function QuotationsPage() {
       {/* Convert to Sale Modal */}
       <Modal
         open={Boolean(convertQ)}
-        onClose={() => setConvertQ(null)}
+        onClose={() => {
+          if (!converting) {
+            setConvertQ(null);
+            setConvertError("");
+          }
+        }}
         title={convertQ ? `Convert ${convertQ.quotation_number} to Invoice` : ""}
       >
         {convertQ && (
           <form onSubmit={submitConvert} className="space-y-4">
+            {convertQ.status === "converted" || convertQ.converted_sale_id ? (
+              <div className="rounded-xl border border-purple-200 bg-purple-50 p-3 text-xs text-purple-800">
+                <p className="font-bold">✓ This quotation has already been converted to an Invoice.</p>
+                {convertQ.converted_sale_id && (
+                  <p className="mt-1 font-mono text-[11px]">Invoice Sale ID: #{convertQ.converted_sale_id}</p>
+                )}
+              </div>
+            ) : null}
+
             <p className="text-xs text-slate-600">
               Quotation total:{" "}
               <span className="font-bold text-slate-900 font-mono text-sm">
@@ -637,9 +692,10 @@ export default function QuotationsPage() {
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Payment method</label>
               <select
+                disabled={converting || convertQ.status === "converted" || Boolean(convertQ.converted_sale_id)}
                 value={convertMethod}
                 onChange={(e) => setConvertMethod(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 focus:border-primary-500 focus:outline-none disabled:bg-slate-100 disabled:opacity-75"
               >
                 {["cash", "card", "bank_transfer", "cheque", "credit", "other"].map((m) => (
                   <option key={m} value={m}>
@@ -651,22 +707,32 @@ export default function QuotationsPage() {
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Amount paid now</label>
               <input
+                disabled={converting || convertQ.status === "converted" || Boolean(convertQ.converted_sale_id)}
                 type="number"
                 min="0"
                 step="any"
                 value={convertPaid}
                 onChange={(e) => setConvertPaid(e.target.value)}
                 autoFocus
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 focus:border-primary-500 focus:outline-none disabled:bg-slate-100 disabled:opacity-75"
               />
             </div>
             {convertError && <p className="text-xs font-semibold text-red-600">{convertError}</p>}
             <button
               type="submit"
-              disabled={converting}
-              className="w-full rounded-xl bg-emerald-600 py-2.5 text-xs font-semibold text-white shadow hover:bg-emerald-700 transition"
+              disabled={converting || convertQ.status === "converted" || Boolean(convertQ.converted_sale_id)}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-2.5 text-xs font-semibold text-white shadow hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {converting ? "Converting…" : "Confirm & Convert to Invoice"}
+              {converting ? (
+                <>
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  <span>Converting to Invoice…</span>
+                </>
+              ) : convertQ.status === "converted" || convertQ.converted_sale_id ? (
+                "Already Converted to Invoice"
+              ) : (
+                "Confirm & Convert to Invoice"
+              )}
             </button>
           </form>
         )}

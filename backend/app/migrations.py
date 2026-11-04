@@ -209,10 +209,19 @@ def _add_quotation_and_repair_columns(engine: Engine) -> None:
 
     if "quotation_items" in inspector.get_table_names():
         qi_cols = {col["name"]: col for col in inspector.get_columns("quotation_items")}
+        # Add any missing columns first so they exist if copying
+        for col_name, ddl in _QUOTATION_ITEM_COLUMNS.items():
+            if col_name not in qi_cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE quotation_items ADD COLUMN {col_name} {ddl}"))
+        inspector = inspect(engine)
+        qi_cols = {col["name"]: col for col in inspector.get_columns("quotation_items")}
+
         # Ensure product_id is nullable for custom manual line items
         if "product_id" in qi_cols and not qi_cols["product_id"].get("nullable", True):
             with engine.begin() as conn:
                 conn.execute(text("PRAGMA foreign_keys = OFF;"))
+                conn.execute(text("DROP TABLE IF EXISTS quotation_items_migration;"))
                 conn.execute(text("""
                     CREATE TABLE quotation_items_migration (
                         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -231,9 +240,14 @@ def _add_quotation_and_repair_columns(engine: Engine) -> None:
                         FOREIGN KEY(product_id) REFERENCES products (id)
                     );
                 """))
-                conn.execute(text("""
-                    INSERT INTO quotation_items_migration (id, quotation_id, product_id, product_name, product_type, description, qty, unit, price, discount, tax, line_total)
-                    SELECT id, quotation_id, product_id, product_name, product_type, description, qty, unit, price, discount, tax, line_total FROM quotation_items;
+                source_cols = [c for c in [
+                    "id", "quotation_id", "product_id", "product_name", "product_type",
+                    "description", "qty", "unit", "price", "discount", "tax", "line_total"
+                ] if c in qi_cols]
+                cols_str = ", ".join(source_cols)
+                conn.execute(text(f"""
+                    INSERT INTO quotation_items_migration ({cols_str})
+                    SELECT {cols_str} FROM quotation_items;
                 """))
                 conn.execute(text("DROP TABLE quotation_items;"))
                 conn.execute(text("ALTER TABLE quotation_items_migration RENAME TO quotation_items;"))
@@ -241,11 +255,6 @@ def _add_quotation_and_repair_columns(engine: Engine) -> None:
             # refresh qi_cols
             inspector = inspect(engine)
             qi_cols = {col["name"]: col for col in inspector.get_columns("quotation_items")}
-
-        for col_name, ddl in _QUOTATION_ITEM_COLUMNS.items():
-            if col_name not in qi_cols:
-                with engine.begin() as conn:
-                    conn.execute(text(f"ALTER TABLE quotation_items ADD COLUMN {col_name} {ddl}"))
 
     if "repairs" in inspector.get_table_names():
         r_cols = {col["name"] for col in inspector.get_columns("repairs")}

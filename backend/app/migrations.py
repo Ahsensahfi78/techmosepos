@@ -21,6 +21,8 @@ _PRODUCT_COLUMNS = {
     "warranty_months": "INTEGER",
     "wholesale_price": "FLOAT",
     "track_imei_col": "BOOLEAN DEFAULT 0",
+    "product_type": "VARCHAR(50) DEFAULT 'Goods'",
+    "unit": "VARCHAR(20) DEFAULT 'pcs'",
 }
 
 DEFAULT_DEPARTMENTS = [
@@ -155,7 +157,7 @@ def _add_branch_columns(engine: Engine) -> None:
 
 
 def _add_customer_columns(engine: Engine) -> None:
-    """customers gained a free-text notes column for the POS quick-add form."""
+    """customers gained notes and customer_type columns."""
     inspector = inspect(engine)
     if "customers" not in inspector.get_table_names():
         return
@@ -163,6 +165,94 @@ def _add_customer_columns(engine: Engine) -> None:
     if "notes" not in existing:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE customers ADD COLUMN notes TEXT"))
+    if "customer_type" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE customers ADD COLUMN customer_type VARCHAR(50) DEFAULT 'Retail'"))
+
+
+_QUOTATION_COLUMNS = {
+    "customer_name": "VARCHAR(150)",
+    "customer_phone": "VARCHAR(50)",
+    "customer_address": "TEXT",
+    "customer_type": "VARCHAR(50) DEFAULT 'Retail'",
+    "tax_rate": "FLOAT DEFAULT 0",
+    "terms": "TEXT",
+}
+
+_QUOTATION_ITEM_COLUMNS = {
+    "product_name": "VARCHAR(255)",
+    "product_type": "VARCHAR(50) DEFAULT 'Goods'",
+    "description": "TEXT",
+    "unit": "VARCHAR(20) DEFAULT 'pcs'",
+    "discount": "FLOAT DEFAULT 0",
+    "tax": "FLOAT DEFAULT 0",
+}
+
+_REPAIR_COLUMNS = {
+    "customer_name": "VARCHAR(150)",
+    "customer_phone": "VARCHAR(50)",
+    "customer_address": "TEXT",
+    "customer_type": "VARCHAR(50) DEFAULT 'Retail'",
+    "estimated_cost": "FLOAT DEFAULT 0",
+    "terms": "TEXT",
+}
+
+
+def _add_quotation_and_repair_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if "quotations" in inspector.get_table_names():
+        q_cols = {col["name"] for col in inspector.get_columns("quotations")}
+        for col_name, ddl in _QUOTATION_COLUMNS.items():
+            if col_name not in q_cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE quotations ADD COLUMN {col_name} {ddl}"))
+
+    if "quotation_items" in inspector.get_table_names():
+        qi_cols = {col["name"]: col for col in inspector.get_columns("quotation_items")}
+        # Ensure product_id is nullable for custom manual line items
+        if "product_id" in qi_cols and not qi_cols["product_id"].get("nullable", True):
+            with engine.begin() as conn:
+                conn.execute(text("PRAGMA foreign_keys = OFF;"))
+                conn.execute(text("""
+                    CREATE TABLE quotation_items_migration (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        quotation_id INTEGER NOT NULL,
+                        product_id INTEGER,
+                        product_name VARCHAR(255),
+                        product_type VARCHAR(50) DEFAULT 'Goods',
+                        description TEXT,
+                        qty FLOAT NOT NULL DEFAULT 1,
+                        unit VARCHAR(20) DEFAULT 'pcs',
+                        price FLOAT NOT NULL DEFAULT 0,
+                        discount FLOAT DEFAULT 0,
+                        tax FLOAT DEFAULT 0,
+                        line_total FLOAT NOT NULL DEFAULT 0,
+                        FOREIGN KEY(quotation_id) REFERENCES quotations (id),
+                        FOREIGN KEY(product_id) REFERENCES products (id)
+                    );
+                """))
+                conn.execute(text("""
+                    INSERT INTO quotation_items_migration (id, quotation_id, product_id, product_name, product_type, description, qty, unit, price, discount, tax, line_total)
+                    SELECT id, quotation_id, product_id, product_name, product_type, description, qty, unit, price, discount, tax, line_total FROM quotation_items;
+                """))
+                conn.execute(text("DROP TABLE quotation_items;"))
+                conn.execute(text("ALTER TABLE quotation_items_migration RENAME TO quotation_items;"))
+                conn.execute(text("PRAGMA foreign_keys = ON;"))
+            # refresh qi_cols
+            inspector = inspect(engine)
+            qi_cols = {col["name"]: col for col in inspector.get_columns("quotation_items")}
+
+        for col_name, ddl in _QUOTATION_ITEM_COLUMNS.items():
+            if col_name not in qi_cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE quotation_items ADD COLUMN {col_name} {ddl}"))
+
+    if "repairs" in inspector.get_table_names():
+        r_cols = {col["name"] for col in inspector.get_columns("repairs")}
+        for col_name, ddl in _REPAIR_COLUMNS.items():
+            if col_name not in r_cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE repairs ADD COLUMN {col_name} {ddl}"))
 
 
 def _seed_master_data(engine: Engine) -> None:
@@ -346,6 +436,7 @@ def run_migrations(engine: Engine) -> None:
     _add_ezcash_columns(engine)
     _add_branch_columns(engine)
     _add_customer_columns(engine)
+    _add_quotation_and_repair_columns(engine)
     _add_product_indexes(engine)
     _init_product_code_sequence(engine)
     _seed_master_data(engine)

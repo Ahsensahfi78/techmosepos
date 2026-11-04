@@ -569,11 +569,16 @@ export const api = {
       }),
   },
   quotations: {
-    list: (params: { status?: string; page?: number; page_size?: number } = {}) =>
+    list: (params: { status?: string; q?: string; page?: number; page_size?: number } = {}) =>
       request<Paginated<Quotation>>(`/quotations?${toQueryString(params)}`),
     create: (data: QuotationInput) =>
       request<Quotation>("/quotations", {
         method: "POST",
+        body: JSON.stringify(data),
+      }),
+    update: (id: number, data: Partial<QuotationInput>) =>
+      request<Quotation>(`/quotations/${id}`, {
+        method: "PUT",
         body: JSON.stringify(data),
       }),
     get: (id: number) => request<Quotation>(`/quotations/${id}`),

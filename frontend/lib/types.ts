@@ -22,6 +22,9 @@ export interface Product {
   stock: number;
   category: string;
   cost_price?: number | null;
+  wholesale_price?: number | null;
+  product_type?: string | null;
+  unit?: string | null;
   sku?: string | null;
   barcode?: string | null;
   model?: string | null;
@@ -39,6 +42,9 @@ export interface ProductCreateInput {
   sku?: string;
   barcode?: string;
   cost_price?: number;
+  wholesale_price?: number;
+  product_type?: string;
+  unit?: string;
   min_stock?: number;
   description?: string;
   auto_generate?: boolean;
@@ -378,6 +384,7 @@ export interface Customer {
   phone: string | null;
   email: string | null;
   address: string | null;
+  customer_type?: string | null;
   notes?: string | null;
   credit_limit: number;
   loyalty_points: number;
@@ -639,27 +646,48 @@ export interface ReceiptBrand {
 
 // ── Quotations ─────────────────────────────────────────────────────────
 export interface QuotationItemInput {
-  product_id: number;
+  product_id?: number | null;
+  product_name?: string;
+  product_type?: string;
+  description?: string;
   qty: number;
+  unit?: string;
   price: number;
+  discount?: number;
+  tax?: number;
+  line_total?: number;
 }
 
 export interface QuotationInput {
   customer_id?: number | null;
+  customer_name?: string;
+  customer_phone?: string;
+  customer_address?: string;
+  customer_type?: string;
   status?: string;
+  subtotal?: number;
   discount_amount?: number;
   tax_rate?: number;
+  tax_amount?: number;
+  total?: number;
   notes?: string;
+  terms?: string;
   valid_until?: string;
   items: QuotationItemInput[];
 }
 
 export interface QuotationItem {
   id: number;
-  product_id: number;
+  quotation_id?: number;
+  product_id?: number | null;
   product_name: string;
+  product_type?: string;
+  description?: string | null;
   qty: number;
+  unit?: string;
   price: number;
+  discount?: number;
+  tax?: number;
   line_total: number;
 }
 
@@ -668,12 +696,17 @@ export interface Quotation {
   quotation_number: string;
   customer_id: number | null;
   customer_name: string | null;
+  customer_phone?: string | null;
+  customer_address?: string | null;
+  customer_type?: string | null;
   status: string;
   subtotal: number;
+  tax_rate?: number;
   discount_amount: number;
   tax_amount: number;
   total: number;
   notes: string | null;
+  terms?: string | null;
   valid_until: string | null;
   converted_sale_id: number | null;
   created_by: number | null;
@@ -752,15 +785,68 @@ export interface ReorderItem {
 }
 
 // ── Repairs ────────────────────────────────────────────────────────────
+export interface RepairItemInput {
+  product_id?: number | null;
+  product_name?: string;
+  product_type?: string;
+  description?: string;
+  qty: number;
+  unit?: string;
+  price: number;
+  discount?: number;
+  tax?: number;
+  line_total?: number;
+}
+
+export interface RepairItem {
+  id: number;
+  repair_id?: number;
+  product_id?: number | null;
+  product_name: string;
+  product_type?: string;
+  description?: string | null;
+  qty: number;
+  unit?: string;
+  price: number;
+  discount?: number;
+  tax?: number;
+  line_total: number;
+}
+
+export interface RepairInput {
+  customer_id?: number | null;
+  customer_name?: string;
+  customer_phone?: string;
+  customer_address?: string;
+  customer_type?: string;
+  product_name: string;
+  imei?: string;
+  issue?: string;
+  status?: string;
+  estimated_cost?: number;
+  service_charge?: number;
+  parts_cost?: number;
+  deposit?: number;
+  paid_amount?: number;
+  technician?: string;
+  notes?: string;
+  terms?: string;
+  items?: RepairItemInput[];
+}
+
 export interface Repair {
   id: number;
   repair_number: string;
   customer_id: number | null;
   customer_name: string | null;
+  customer_phone?: string | null;
+  customer_address?: string | null;
+  customer_type?: string | null;
   product_name: string;
   imei: string | null;
   issue: string | null;
   status: string;
+  estimated_cost: number;
   service_charge: number;
   parts_cost: number;
   deposit: number;
@@ -768,24 +854,12 @@ export interface Repair {
   total: number;
   technician: string | null;
   notes: string | null;
+  terms?: string | null;
   received_by: number | null;
   received_by_name: string | null;
   created_at: string;
   updated_at: string | null;
-}
-
-export interface RepairInput {
-  customer_id?: number | null;
-  product_name: string;
-  imei?: string;
-  issue?: string;
-  status?: string;
-  service_charge?: number;
-  parts_cost?: number;
-  deposit?: number;
-  paid_amount?: number;
-  technician?: string;
-  notes?: string;
+  items?: RepairItem[];
 }
 
 // ── Unified Transactions & History ───────────────────────────────────────

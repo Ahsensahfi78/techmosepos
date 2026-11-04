@@ -208,16 +208,18 @@ export default function ReceiptPaper({
           </p>
         )}
       </div>
+      <div className="r-divider" />
       {footerLines.length > 0 && (
-        <>
-          <div className="r-divider" />
-          <div className="r-foot">
-            {footerLines.map((line, i) => (
-              <p key={i}>{line}</p>
-            ))}
-          </div>
-        </>
+        <div className="r-foot">
+          {footerLines.map((line, i) => (
+            <p key={i}>{line}</p>
+          ))}
+        </div>
       )}
+      <div className="r-dev-footer">
+        <p>Developed by Tech MOS</p>
+        <p>0771234184</p>
+      </div>
     </div>
   );
 }

@@ -431,7 +431,9 @@ def build_receipt_layout(
 
     for line in invoice["lines"]:
         canvas.line(line["name"], 9.0, font=FONT_RECEIPT)
-        canvas.line(f"   {line['sku']}", 7.5, font=FONT_RECEIPT, color="#475569")
+        sku = line.get("sku")
+        if sku:
+            canvas.line(f"   {sku}", 7.5, font=FONT_RECEIPT, color="#475569")
         detail = f"@ {_money(line['unit_price'], currency)} each"
         if line["discount"] > 0:
             detail += f"  - {_money(line['discount'], currency)} disc"
@@ -493,6 +495,8 @@ def build_receipt_layout(
 
     for text in footer:
         canvas.line(text or " ", 7.5, align="center")
+    canvas.line("Developed by Tech MOS", 7.5, align="center", bold=True)
+    canvas.line("0771234184", 7.0, align="center")
     canvas.line(
         "DIAGNOSTIC ONLY - no sale, stock, payment or drawer was created.",
         7.5,

@@ -65,6 +65,8 @@ interface CartPanelProps {
   onRemoveLine?: (id: number) => void;
   /** Customer chip rendered at the top of the order panel. */
   customerChip?: ReactNode;
+  /** Open the Bill Without Product / Custom Item dialog. */
+  onOpenCustomBill?: () => void;
 }
 
 const QUICK_ADDS = [1, 5, 10, 20];
@@ -92,13 +94,24 @@ export default function CartPanel({
   onRemoveLine,
   summary,
   customerChip,
+  onOpenCustomBill,
 }: CartPanelProps) {
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-slate-100 pb-3">
         <h2 className="text-base font-bold">Current order</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          {onOpenCustomBill && (
+            <button
+              type="button"
+              onClick={onOpenCustomBill}
+              className="rounded-lg bg-slate-900 px-2 py-1 text-[11px] font-bold text-white shadow-sm transition hover:bg-slate-800 active:scale-95"
+              title="Bill without product (F5)"
+            >
+              ⚡ Custom
+            </button>
+          )}
           <span className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
             <span
               className={`h-2 w-2 rounded-full ${
@@ -138,8 +151,17 @@ export default function CartPanel({
               Cart is empty
             </p>
             <p className="text-xs text-slate-400">
-              Tap a product to add it
+              Tap a product to add it, or bill custom items directly
             </p>
+            {onOpenCustomBill && (
+              <button
+                type="button"
+                onClick={onOpenCustomBill}
+                className="mt-3 flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
+              >
+                ⚡ Bill Without Product
+              </button>
+            )}
           </div>
         )}
         {lines.map((l) => {

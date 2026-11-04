@@ -117,8 +117,14 @@ export function fitReceiptPage(
   el: Element | null | undefined,
   widthMm: string | number | null | undefined
 ): { widthMm: number; heightMm: number } {
-  const height = measureReceiptHeightMm(el) + RECEIPT_PAGE_TRIM_MM;
-  return applyReceiptPageSize(widthMm ?? RECEIPT_WIDTH_DEFAULT_MM, height);
+  const width = parseReceiptWidth(widthMm);
+  const measured = measureReceiptHeightMm(el) + RECEIPT_PAGE_TRIM_MM;
+  // A receipt must always be portrait. If measured height < width (such as a 1-item receipt
+  // measuring ~50mm on 80mm roll width), width > height causes Chrome and Windows printer drivers
+  // to automatically classify the document as Landscape and rotate it 90 degrees sideways!
+  // Clamping to at least width + 1 guarantees height > width, locking the page to Portrait.
+  const height = Math.max(width + 1, measured);
+  return applyReceiptPageSize(width, height);
 }
 
 /* ── Upside-down printers ──────────────────────────────────────────────── */

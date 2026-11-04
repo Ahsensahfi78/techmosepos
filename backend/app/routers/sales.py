@@ -77,6 +77,8 @@ def _return_out(r: models.SaleReturn) -> schemas.SaleReturnOut:
 
 async def _broadcast_sale(sale: models.Sale) -> None:
     for item in sale.items:
+        if not item.product:
+            continue
         await manager.broadcast(
             {
                 "type": "stock_update",
@@ -93,6 +95,8 @@ async def _broadcast_sale(sale: models.Sale) -> None:
 
 async def _broadcast_return(ret: models.SaleReturn) -> None:
     for item in ret.items:
+        if not item.product:
+            continue
         await manager.broadcast(
             {
                 "type": "stock_update",

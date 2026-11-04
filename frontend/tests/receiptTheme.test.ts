@@ -149,13 +149,15 @@ describe("measureReceiptHeightMm / fitReceiptPage", () => {
     expect(pageRule()).toContain("size: 58mm 301mm");
   });
 
-  it("measures a real element into the media box", () => {
+  it("measures a real element into the media box, clamping to portrait minimum", () => {
     const el = document.createElement("div");
     el.getBoundingClientRect = () =>
       ({ height: 190.5, width: 0, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
     const out = fitReceiptPage(el, 80);
-    expect(out.heightMm).toBe(52); // ceil(50.403 + 1)
-    expect(pageRule()).toContain("size: 80mm 52mm");
+    // 50.4mm measured is smaller than 80mm width, so it clamps to width + 1 (81mm)
+    // to prevent Chrome / Windows drivers from rotating into landscape.
+    expect(out.heightMm).toBe(81);
+    expect(pageRule()).toContain("size: 80mm 81mm");
   });
 });
 

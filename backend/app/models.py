@@ -83,6 +83,8 @@ class Product(Base):
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     warranty_months = Column(Integer, nullable=True)
+    product_type = Column(String(50), nullable=True, default="Goods")
+    unit = Column(String(20), nullable=True, default="pcs")
     track_imei = Column(Boolean, default=False, name="track_imei_col")
     description = Column(Text, nullable=True)
     image_url = Column(String(500), nullable=True)
@@ -304,6 +306,7 @@ class Customer(Base):
     phone = Column(String(50), nullable=True)
     email = Column(String(100), nullable=True)
     address = Column(Text, nullable=True)
+    customer_type = Column(String(50), nullable=True, default="Retail")
     notes = Column(Text, nullable=True)
     loyalty_points = Column(Integer, nullable=False, default=0)
     credit_limit = Column(Float, nullable=False, default=0.0)
@@ -598,6 +601,8 @@ class Setting(Base):
 class QuotationStatus(str, enum.Enum):
     DRAFT = "draft"
     SENT = "sent"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
     CONVERTED = "converted"
     CANCELLED = "cancelled"
 
@@ -608,12 +613,18 @@ class Quotation(Base):
     id = Column(Integer, primary_key=True, index=True)
     quotation_number = Column(String(50), unique=True, nullable=False, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    customer_name = Column(String(150), nullable=True)
+    customer_phone = Column(String(50), nullable=True)
+    customer_address = Column(Text, nullable=True)
+    customer_type = Column(String(50), nullable=True, default="Retail")
     status = Column(String(20), nullable=False, default=QuotationStatus.DRAFT.value, index=True)
     subtotal = Column(Float, nullable=False, default=0.0)
+    tax_rate = Column(Float, nullable=False, default=0.0)
     discount_amount = Column(Float, nullable=False, default=0.0)
     tax_amount = Column(Float, nullable=False, default=0.0)
     total = Column(Float, nullable=False, default=0.0)
     notes = Column(Text, nullable=True)
+    terms = Column(Text, nullable=True)
     valid_until = Column(DateTime, nullable=True)
     converted_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -635,16 +646,24 @@ class QuotationItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     quotation_id = Column(Integer, ForeignKey("quotations.id"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    qty = Column(Integer, nullable=False, default=1)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    product_name = Column(String(255), nullable=True)
+    product_type = Column(String(50), nullable=True, default="Goods")
+    description = Column(Text, nullable=True)
+    qty = Column(Float, nullable=False, default=1.0)
+    unit = Column(String(20), nullable=True, default="pcs")
     price = Column(Float, nullable=False, default=0.0)
+    discount = Column(Float, nullable=False, default=0.0)
+    tax = Column(Float, nullable=False, default=0.0)
     line_total = Column(Float, nullable=False, default=0.0)
 
     quotation = relationship("Quotation", back_populates="items")
     product = relationship("Product")
 
     @property
-    def product_name(self) -> str:
+    def resolved_name(self) -> str:
+        if self.product_name:
+            return self.product_name
         return self.product.name if self.product else ""
 
 
@@ -729,16 +748,22 @@ class Repair(Base):
     id = Column(Integer, primary_key=True, index=True)
     repair_number = Column(String(50), unique=True, nullable=False, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    customer_name = Column(String(150), nullable=True)
+    customer_phone = Column(String(50), nullable=True)
+    customer_address = Column(Text, nullable=True)
+    customer_type = Column(String(50), nullable=True, default="Retail")
     product_name = Column(String(150), nullable=False)
     imei = Column(String(50), nullable=True, index=True)
     issue = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, default=RepairStatus.RECEIVED.value)
+    estimated_cost = Column(Float, nullable=False, default=0.0)
     service_charge = Column(Float, nullable=False, default=0.0)
     parts_cost = Column(Float, nullable=False, default=0.0)
     deposit = Column(Float, nullable=False, default=0.0)
     paid_amount = Column(Float, nullable=False, default=0.0)
     technician = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
+    terms = Column(Text, nullable=True)
     branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     received_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -747,10 +772,37 @@ class Repair(Base):
     customer = relationship("Customer")
     branch = relationship("Branch")
     user = relationship("User")
+    items = relationship(
+        "RepairItem",
+        back_populates="repair",
+        cascade="all, delete-orphan",
+    )
+
+
+class RepairItem(Base):
+    __tablename__ = "repair_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    repair_id = Column(Integer, ForeignKey("repairs.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
+    product_name = Column(String(255), nullable=True)
+    product_type = Column(String(50), nullable=True, default="Service")
+    description = Column(Text, nullable=True)
+    qty = Column(Float, nullable=False, default=1.0)
+    unit = Column(String(20), nullable=True, default="pcs")
+    price = Column(Float, nullable=False, default=0.0)
+    discount = Column(Float, nullable=False, default=0.0)
+    tax = Column(Float, nullable=False, default=0.0)
+    line_total = Column(Float, nullable=False, default=0.0)
+
+    repair = relationship("Repair", back_populates="items")
+    product = relationship("Product")
 
     @property
-    def customer_name(self) -> str:
-        return self.customer.name if self.customer else ""
+    def resolved_name(self) -> str:
+        if self.product_name:
+            return self.product_name
+        return self.product.name if self.product else ""
 
 
 class EzCashStatus(str, enum.Enum):

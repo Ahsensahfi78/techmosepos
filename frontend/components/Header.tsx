@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -12,6 +12,8 @@ import { can } from "@/lib/nlp/permissions";
 const primaryLinks = [
   { href: "/pos", label: "POS", icon: "🛒" },
   { href: "/dashboard", label: "Dashboard", icon: "📊" },
+  { href: "/quotations", label: "Quotations", icon: "📄" },
+  { href: "/repairs", label: "Repairs", icon: "🔧" },
   { href: "/ezcash", label: "EZ Cash", icon: "📱" },
   { href: "/products", label: "Products", icon: "📦", adminOnly: true },
   { href: "/customers", label: "Customers", icon: "🧑‍🤝‍🧑" },

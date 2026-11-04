@@ -13,6 +13,7 @@ import Modal from "@/components/ui/Modal";
 import PageHeader from "@/components/ui/PageHeader";
 import CartPanel, { type CartLine, lineSubtotal } from "@/components/CartPanel";
 import CheckoutModal, { type SplitLine } from "@/components/CheckoutModal";
+import CustomBillModal, { type CustomBillItemData } from "@/components/CustomBillModal";
 import EzCashReloadModal from "@/components/EzCashReloadModal";
 import ReceiptModal from "@/components/ReceiptModal";
 import CustomerCombobox, {
@@ -79,6 +80,7 @@ const SHORTCUTS: { key: string; label: string }[] = [
   { key: "F2", label: "Search products (name / SKU / barcode)" },
   { key: "F3", label: "Scan barcode / SKU" },
   { key: "F4 / Ctrl + K", label: "Select customer" },
+  { key: "F5", label: "Bill without product (custom item)" },
   { key: "F6", label: "Hold current invoice" },
   { key: "F7", label: "Held / parked invoices" },
   { key: "F8", label: "Charge & checkout" },
@@ -112,10 +114,6 @@ export default function PosPage() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [ezCashOpen, setEzCashOpen] = useState(false);
   const [adhocOpen, setAdhocOpen] = useState(false);
-  const [adhocName, setAdhocName] = useState("");
-  const [adhocQty, setAdhocQty] = useState(1);
-  const [adhocPrice, setAdhocPrice] = useState(0);
-  const [adhocDiscount, setAdhocDiscount] = useState(0);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef<HTMLInputElement>(null);
@@ -430,38 +428,21 @@ export default function PosPage() {
     addToCartQty(product, 1);
   }
 
-  function addAdhocToCart() {
-    if (!adhocName.trim()) {
-      toast("Item name is required", "error");
-      return;
-    }
-    if (adhocQty < 1) {
-      toast("Quantity must be at least 1", "error");
-      return;
-    }
-    if (adhocPrice <= 0) {
-      toast("Price must be greater than zero", "error");
-      return;
-    }
+  function handleCustomBillAdd(item: CustomBillItemData) {
     const id = -adhocCounterRef.current;
     adhocCounterRef.current++;
     const line: CartLine = {
       product: {
         id,
-        name: adhocName.trim(),
-        price: adhocPrice,
+        name: item.name,
+        price: item.price,
         stock: Infinity,
       },
-      qty: adhocQty,
+      qty: item.qty,
       adhoc: true,
-      lineDiscount: adhocDiscount || undefined,
+      lineDiscount: item.discount > 0 ? item.discount : undefined,
     };
     setCart((prev) => [...prev, line]);
-    setAdhocOpen(false);
-    setAdhocName("");
-    setAdhocQty(1);
-    setAdhocPrice(0);
-    setAdhocDiscount(0);
     toast(`Added "${line.product.name}" to cart`, "success");
   }
 
@@ -1122,6 +1103,10 @@ export default function PosPage() {
           e.preventDefault();
           customerPickerRef.current?.open();
           break;
+        case "F5":
+          e.preventDefault();
+          setAdhocOpen(true);
+          break;
         case "F6":
           e.preventDefault();
           if (cartLenRef.current > 0) holdRef.current();
@@ -1434,6 +1419,7 @@ export default function PosPage() {
     stockById,
     onSetToAvailable: setToAvailable,
     onRemoveLine: removeLine,
+    onOpenCustomBill: () => setAdhocOpen(true),
     customerChip: customer ? (
       <div className="flex items-center justify-between gap-2 rounded-xl bg-primary-50 px-3 py-2 ring-1 ring-primary-100">
         <span className="min-w-0">
@@ -1479,6 +1465,13 @@ export default function PosPage() {
         })}
       >
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setAdhocOpen(true)}
+            className="badge flex items-center gap-1.5 bg-slate-900 px-3 py-1.5 text-xs font-bold text-white shadow-sm ring-1 ring-slate-900 transition hover:bg-slate-800 active:scale-95"
+            title="Bill Without Product / Custom Item (F5)"
+          >
+            ⚡ BILL WITHOUT PRODUCT
+          </button>
           <span className="badge bg-white text-slate-500 ring-1 ring-slate-200">
             {products.length} products on shelf
           </span>
@@ -2166,6 +2159,12 @@ export default function PosPage() {
       <EzCashReloadModal
         open={ezCashOpen}
         onClose={() => setEzCashOpen(false)}
+      />
+
+      <CustomBillModal
+        open={adhocOpen}
+        onClose={() => setAdhocOpen(false)}
+        onAddItem={handleCustomBillAdd}
       />
     </div>
   );

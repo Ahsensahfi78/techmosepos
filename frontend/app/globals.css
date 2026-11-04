@@ -376,6 +376,15 @@ body {
   font-weight: 700;
 }
 
+.r-dev-footer {
+  text-align: center;
+  font-size: 9.5px;
+  font-weight: 600;
+  margin-top: 1.5mm;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+}
+
 /* On-screen paper-strip preview inside the receipt modal. */
 .receipt-preview {
   margin: 0 auto;

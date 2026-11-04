@@ -239,6 +239,7 @@ class CustomerBase(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     email: Optional[EmailStr] = None
     address: Optional[str] = None
+    customer_type: Optional[str] = Field(default="Retail", max_length=50)
     notes: Optional[str] = Field(default=None, max_length=2000)
     credit_limit: float = Field(default=0.0, ge=0)
 
@@ -252,6 +253,7 @@ class CustomerUpdate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     email: Optional[EmailStr] = None
     address: Optional[str] = None
+    customer_type: Optional[str] = Field(default=None, max_length=50)
     notes: Optional[str] = Field(default=None, max_length=2000)
     credit_limit: Optional[float] = Field(default=None, ge=0)
     is_active: Optional[bool] = None
@@ -358,7 +360,10 @@ class ProductBase(BaseModel):
     sku: Optional[str] = None
     barcode: Optional[str] = None
     cost_price: Optional[float] = Field(default=None, ge=0)
+    wholesale_price: Optional[float] = Field(default=None, ge=0)
     min_stock: Optional[int] = Field(default=None, ge=0)
+    product_type: Optional[str] = Field(default="Goods", max_length=50)
+    unit: Optional[str] = Field(default="pcs", max_length=20)
     description: Optional[str] = None
 
 
@@ -378,7 +383,10 @@ class ProductUpdate(BaseModel):
     sku: Optional[str] = None
     barcode: Optional[str] = None
     cost_price: Optional[float] = Field(default=None, ge=0)
+    wholesale_price: Optional[float] = Field(default=None, ge=0)
     min_stock: Optional[int] = Field(default=None, ge=0)
+    product_type: Optional[str] = Field(default=None, max_length=50)
+    unit: Optional[str] = Field(default=None, max_length=20)
     description: Optional[str] = None
     is_active: Optional[bool] = None
     track_imei: Optional[bool] = None
@@ -775,28 +783,67 @@ class SettingOut(BaseModel):
 
 # ── Quotations ──────────────────────────────────────────────────────────
 class QuotationItemIn(BaseModel):
-    product_id: int
-    qty: int = Field(ge=1)
-    price: float = Field(ge=0)
+    product_id: Optional[int] = None
+    product_name: Optional[str] = None
+    product_type: Optional[str] = "Goods"
+    description: Optional[str] = None
+    qty: float = Field(default=1.0, gt=0)
+    unit: Optional[str] = "pcs"
+    price: float = Field(default=0.0, ge=0)
+    discount: float = Field(default=0.0, ge=0)
+    tax: float = Field(default=0.0, ge=0)
+    line_total: Optional[float] = None
 
 
 class QuotationIn(BaseModel):
     customer_id: Optional[int] = None
-    status: str = Field(default="draft", pattern="^(draft|sent|converted|cancelled)$")
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_type: Optional[str] = "Retail"
+    status: str = Field(default="draft", pattern="^(draft|sent|accepted|rejected|converted|cancelled)$")
+    subtotal: Optional[float] = None
     discount_amount: float = Field(default=0, ge=0)
     tax_rate: float = Field(default=0, ge=0, le=100)
-    notes: Optional[str] = Field(default=None, max_length=1000)
+    tax_amount: Optional[float] = None
+    total: Optional[float] = None
+    notes: Optional[str] = Field(default=None, max_length=2000)
+    terms: Optional[str] = Field(default=None, max_length=2000)
     valid_until: Optional[datetime] = None
     items: List[QuotationItemIn] = Field(min_length=1)
 
 
+class QuotationUpdateIn(BaseModel):
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_type: Optional[str] = None
+    status: Optional[str] = Field(default=None, pattern="^(draft|sent|accepted|rejected|converted|cancelled)$")
+    subtotal: Optional[float] = None
+    discount_amount: Optional[float] = Field(default=None, ge=0)
+    tax_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    tax_amount: Optional[float] = None
+    total: Optional[float] = None
+    notes: Optional[str] = None
+    terms: Optional[str] = None
+    valid_until: Optional[datetime] = None
+    items: Optional[List[QuotationItemIn]] = None
+
+
 class QuotationItemOut(BaseModel):
     id: int
-    product_id: int
-    product_name: str
-    qty: int
-    price: float
-    line_total: float
+    quotation_id: Optional[int] = None
+    product_id: Optional[int] = None
+    product_name: Optional[str] = None
+    product_type: Optional[str] = "Goods"
+    description: Optional[str] = None
+    qty: float = 1.0
+    unit: Optional[str] = "pcs"
+    price: float = 0.0
+    discount: float = 0.0
+    tax: float = 0.0
+    line_total: float = 0.0
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -805,12 +852,17 @@ class QuotationOut(BaseModel):
     quotation_number: str
     customer_id: Optional[int] = None
     customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_type: Optional[str] = "Retail"
     status: str
     subtotal: float
+    tax_rate: float = 0.0
     discount_amount: float
     tax_amount: float
     total: float
     notes: Optional[str] = None
+    terms: Optional[str] = None
     valid_until: Optional[datetime] = None
     converted_sale_id: Optional[int] = None
     created_by: Optional[int] = None
@@ -821,7 +873,7 @@ class QuotationOut(BaseModel):
 
 
 class QuotationStatusIn(BaseModel):
-    status: str = Field(pattern="^(draft|sent|converted|cancelled)$")
+    status: str = Field(pattern="^(draft|sent|accepted|rejected|converted|cancelled)$")
 
 
 class QuotationConvertIn(BaseModel):
@@ -912,31 +964,75 @@ class ReorderItemOut(BaseModel):
 
 
 # ── Module 7: Repairs ───────────────────────────────────────────────────
+class RepairItemIn(BaseModel):
+    product_id: Optional[int] = None
+    product_name: Optional[str] = None
+    product_type: Optional[str] = "Service"
+    description: Optional[str] = None
+    qty: float = Field(default=1.0, gt=0)
+    unit: Optional[str] = "pcs"
+    price: float = Field(default=0.0, ge=0)
+    discount: float = Field(default=0.0, ge=0)
+    tax: float = Field(default=0.0, ge=0)
+    line_total: Optional[float] = None
+
+
+class RepairItemOut(BaseModel):
+    id: int
+    repair_id: Optional[int] = None
+    product_id: Optional[int] = None
+    product_name: Optional[str] = None
+    product_type: Optional[str] = "Service"
+    description: Optional[str] = None
+    qty: float = 1.0
+    unit: Optional[str] = "pcs"
+    price: float = 0.0
+    discount: float = 0.0
+    tax: float = 0.0
+    line_total: float = 0.0
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RepairIn(BaseModel):
     customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_type: Optional[str] = "Retail"
     product_name: str = Field(min_length=1, max_length=150)
     imei: Optional[str] = Field(default=None, max_length=50)
     issue: Optional[str] = Field(default=None, max_length=2000)
     status: Optional[str] = None
+    estimated_cost: float = Field(default=0.0, ge=0)
     service_charge: float = Field(default=0.0, ge=0)
     parts_cost: float = Field(default=0.0, ge=0)
     deposit: float = Field(default=0.0, ge=0)
     paid_amount: float = Field(default=0.0, ge=0)
     technician: Optional[str] = Field(default=None, max_length=100)
     notes: Optional[str] = Field(default=None, max_length=2000)
+    terms: Optional[str] = Field(default=None, max_length=2000)
+    items: List[RepairItemIn] = []
 
 
 class RepairUpdateIn(BaseModel):
     customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_type: Optional[str] = None
     product_name: Optional[str] = None
     imei: Optional[str] = None
     issue: Optional[str] = None
+    status: Optional[str] = None
+    estimated_cost: Optional[float] = Field(default=None, ge=0)
     service_charge: Optional[float] = Field(default=None, ge=0)
     parts_cost: Optional[float] = Field(default=None, ge=0)
     deposit: Optional[float] = Field(default=None, ge=0)
     paid_amount: Optional[float] = Field(default=None, ge=0)
     technician: Optional[str] = None
     notes: Optional[str] = None
+    terms: Optional[str] = None
+    items: Optional[List[RepairItemIn]] = None
 
 
 class RepairStatusIn(BaseModel):
@@ -952,10 +1048,14 @@ class RepairOut(BaseModel):
     repair_number: str
     customer_id: Optional[int] = None
     customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_type: Optional[str] = "Retail"
     product_name: str
     imei: Optional[str] = None
     issue: Optional[str] = None
     status: str
+    estimated_cost: float = 0.0
     service_charge: float
     parts_cost: float
     deposit: float
@@ -963,10 +1063,12 @@ class RepairOut(BaseModel):
     total: float
     technician: Optional[str] = None
     notes: Optional[str] = None
+    terms: Optional[str] = None
     received_by: Optional[int] = None
     received_by_name: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    items: List[RepairItemOut] = []
     model_config = ConfigDict(from_attributes=True)
 
 

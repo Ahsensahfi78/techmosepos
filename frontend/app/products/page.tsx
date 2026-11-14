@@ -25,7 +25,7 @@ import {
   removeQueuedProducts,
   updateQueuedProduct,
 } from "@/lib/offline";
-import type { BranchStock, Product } from "@/lib/types";
+import type { BranchStock, Product, ProductCreateInput } from "@/lib/types";
 
 interface FormState {
   name: string;
@@ -35,6 +35,8 @@ interface FormState {
   sku: string;
   barcode: string;
   min_stock: string;
+  warranty_months: string;
+  branch_id: string;
 }
 
 const emptyForm: FormState = {
@@ -45,17 +47,56 @@ const emptyForm: FormState = {
   sku: "",
   barcode: "",
   min_stock: "",
+  warranty_months: "",
+  branch_id: "",
 };
 
 type StockFilter = "all" | "low" | "out";
 
 export default function ProductsPage() {
-  const { products } = useStock();
   const { toast } = useToast();
   const { user } = useAuth();
   const router = useRouter();
-  const canManage = user?.role === "super_admin" || user?.role === "admin" || user?.role === "manager";
+  const canManage = can(user?.role, "product.create");
   const canPrintBarcode = can(user?.role, "barcode.print");
+
+  const [branchId, setBranchId] = useState<number | undefined>(undefined);
+  const [branchName, setBranchName] = useState<string | null>(null);
+  const [branches, setBranches] = useState<{ id: number; name: string; code: string }[]>([]);
+
+  // Resolve user's branch code to branch_id for branch-scoped stock
+  useEffect(() => {
+    if (!user?.branch) {
+      setBranchId(undefined);
+      setBranchName(null);
+      setBranches([]);
+      return;
+    }
+    api.branches
+      .list()
+      .then((data) => {
+        const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+        // Branch-scoped users only see their own branch
+        const filteredBranches = isAdmin ? data : data.filter((b) => b.code.toLowerCase() === user!.branch!.toLowerCase());
+        setBranches(filteredBranches);
+        const b = filteredBranches.find((x) => x.code.toLowerCase() === user!.branch!.toLowerCase());
+        if (b) {
+          setBranchId(b.id);
+          setBranchName(b.name);
+        } else {
+          setBranchId(undefined);
+          setBranchName(null);
+        }
+      })
+      .catch(() => {
+        setBranchId(undefined);
+        setBranchName(null);
+        setBranches([]);
+      });
+  }, [user?.branch, user?.role]);
+
+  const { products, branchLabel } = useStock(branchId);
+  const isAdmin = user?.role === "super_admin" || user?.role === "admin";
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
@@ -198,6 +239,8 @@ export default function ProductsPage() {
       sku: p.sku ?? "",
       barcode: p.barcode ?? "",
       min_stock: p.min_stock ? String(p.min_stock) : "",
+      warranty_months: p.warranty_months ? String(p.warranty_months) : "",
+      branch_id: "",
     });
     setFormError("");
     setCodeMode("manual");
@@ -229,7 +272,7 @@ export default function ProductsPage() {
     setCodeNotice("");
   }
 
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     if (e.target.name === "sku") setCodeNotice("");
     setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
   }
@@ -313,7 +356,7 @@ export default function ProductsPage() {
       );
       return;
     }
-    const payload = {
+    const payload: ProductCreateInput = {
       name,
       price: parseFloat(form.price) || 0,
       stock: parseInt(form.stock, 10) || 0,
@@ -321,7 +364,13 @@ export default function ProductsPage() {
       sku: sku || undefined,
       barcode: barcode || undefined,
       min_stock: parseInt(form.min_stock, 10) || 0,
+      warranty_months: form.warranty_months.trim() ? parseInt(form.warranty_months, 10) : null,
     };
+    // Only admins can explicitly choose a branch; branch-scoped users are
+    // resolved server-side from their account.
+    if (isAdmin && form.branch_id.trim()) {
+      payload.branch_id = parseInt(form.branch_id, 10);
+    }
     setSaving(true);
     try {
       if (editing) {
@@ -465,7 +514,14 @@ export default function ProductsPage() {
 
   return (
     <div className="animate-fade-up">
-      <PageHeader title="Products" subtitle={`${products.length} items in catalog`}>
+      <PageHeader
+        title="Products"
+        subtitle={
+          branchName
+            ? `${products.length} items · ${branchName} branch stock`
+            : `${products.length} items in catalog`
+        }
+      >
         {canManage && (
           <button onClick={openAdd} className="btn btn-primary">
             + Add product
@@ -656,6 +712,11 @@ export default function ProductsPage() {
                   {!p.sku && p.category}
                   {p.min_stock ? ` · alert below ${p.min_stock}` : ""}
                 </p>
+                {p.warranty_months && p.warranty_months > 0 && (
+                  <p className="text-[11px] font-medium text-blue-600 mb-1">
+                    🛡️ Warranty {p.warranty_months} months
+                  </p>
+                )}
                 <p className="mt-2 text-base font-bold text-emerald-600">
                   {formatMoney(p.price)}
                 </p>
@@ -758,6 +819,47 @@ export default function ProductsPage() {
                 className="input"
               />
               <p className="hint">Badge turns orange when stock drops below this.</p>
+            </div>
+            <div>
+              <label className="label">Warranty (months)</label>
+              <input
+                name="warranty_months"
+                type="number"
+                min="0"
+                value={form.warranty_months}
+                onChange={handleChange}
+                placeholder="e.g. 12"
+                className="input"
+              />
+              <p className="hint">Shown when the product is scanned at POS.</p>
+            </div>
+            <div>
+              <label className="label">Initial Stock Branch</label>
+              {isAdmin ? (
+                <>
+                  <select
+                    name="branch_id"
+                    value={form.branch_id}
+                    onChange={handleChange}
+                    className="input"
+                  >
+                    <option value="">Default (user's branch)</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.code})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="hint">Which branch this product is initially stocked at.</p>
+                </>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="badge bg-slate-100 text-slate-700 text-xs px-2 py-1">
+                    {branchName ?? "User's branch"}
+                  </span>
+                  <p className="hint">Resolved from your account — you can only stock your own branch.</p>
+                </div>
+              )}
             </div>
             <div>
               <label className="label">Category</label>

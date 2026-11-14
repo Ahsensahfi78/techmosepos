@@ -13,6 +13,7 @@ from ..database import engine, get_db
 from ..permissions import require_permission
 from ..repositories.audit_repo import AuditLogRepository
 from ..services import product_code_service
+from ..services.stock_service import StockService
 
 router = APIRouter(prefix="/backup", tags=["backup"])
 
@@ -219,7 +220,10 @@ async def import_products_csv(
             cost = _opt_float(line.get("cost_price"))
             if cost is not None:
                 product.cost_price = cost
-            product.stock = int(line.get("stock") or 0 or product.stock or 0)
+            # NOTE: product.stock is NOT written directly here. Stock is managed
+            # exclusively through StockService per (product, branch). CSV import
+            # updates product metadata only; stock levels must be set via the
+            # restock/adjustment endpoints for the appropriate branch.
             product.min_stock = int(line.get("min_stock") or 0 or product.min_stock or 0)
             months = _opt_int(line.get("warranty_months"))
             if months is not None:
@@ -231,14 +235,6 @@ async def import_products_csv(
             raise HTTPException(
                 status_code=400, detail=f"Bad numeric value in row for '{name}'"
             )
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail="Import contains a duplicate product code or barcode",
-        )
     AuditLogRepository(db).log(
         action="backup.import_products",
         entity_type="product",

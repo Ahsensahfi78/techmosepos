@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from . import ledger_service
+from .stock_service import StockService
 
 
 def _next_number(db: Session, prefix: str) -> str:
@@ -174,6 +175,49 @@ def receive_purchase_order(
     if warehouse_id is not None and db.get(models.Warehouse, warehouse_id) is None:
         raise HTTPException(status_code=404, detail="Warehouse not found")
 
+def receive_purchase_order(
+    db: Session,
+    po_id: int,
+    data,
+    user_id: Optional[int] = None,
+    branch_id: Optional[int] = None,
+) -> models.Purchase:
+    po = get_purchase_order(db, po_id)
+    if po.status == models.PurchaseOrderStatus.CANCELLED.value:
+        raise HTTPException(status_code=400, detail="Cannot receive a cancelled order")
+    if po.status == models.PurchaseOrderStatus.RECEIVED.value:
+        raise HTTPException(status_code=400, detail="Order is fully received")
+
+    po_items = {i.product_id: i for i in po.items}
+    received_map = {}
+    for line in data.qty:
+        item = po_items.get(line.product_id)
+        if item is None:
+            raise HTTPException(
+                status_code=400, detail=f"Product {line.product_id} is not on this order"
+            )
+        remaining = item.qty_ordered - (item.qty_received or 0)
+        if line.qty <= 0:
+            raise HTTPException(status_code=400, detail="Quantity must be positive")
+        if line.qty > remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Product {line.product_id}: cannot receive more than remaining {remaining}",
+            )
+        received_map[line.product_id] = line.qty
+
+    warehouse_id = data.warehouse_id or po.warehouse_id
+    if warehouse_id is not None and db.get(models.Warehouse, warehouse_id) is None:
+        raise HTTPException(status_code=404, detail="Warehouse not found")
+
+    # Resolve receiving branch: PO branch takes precedence, else user's branch
+    receiving_branch_id = po.branch_id or branch_id
+    if not receiving_branch_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No receiving branch on purchase order or user context",
+        )
+
     purchase_items = []
     received_subtotal = 0.0
     for product_id, qty in received_map.items():
@@ -215,26 +259,29 @@ def receive_purchase_order(
         status=models.PurchaseStatus.UNPAID.value,
         notes=data.notes,
         created_by=user_id,
+        branch_id=receiving_branch_id,
         items=purchase_items,
     )
     db.add(purchase)
     db.flush()
 
+    # Stock goes through StockService (single write path, branch-scoped).
+    unit_costs = {pid: po_items[pid].cost_price for pid in received_map}
+    StockService.purchase_receipt(
+        db=db,
+        branch_id=receiving_branch_id,
+        deltas=received_map,
+        reference_type="purchase",
+        reference_id=purchase.id,
+        user_id=user_id,
+        unit_costs=unit_costs,
+    )
+
+    po_items_map = {i.product_id: i for i in po.items}
     for product_id, qty in received_map.items():
-        product = _get_product(db, product_id)
-        prev = product.stock or 0
-        product.stock = prev + qty
-        db.add(
-            models.StockTransaction(
-                product_id=product_id,
-                change_qty=qty,
-                previous_stock=prev,
-                new_stock=product.stock,
-                reason="purchase",
-                reference_id=purchase.id,
-            )
-        )
-        po_items[product_id].qty_received = (po_items[product_id].qty_received or 0) + qty
+        po_items_map[product_id].qty_received = (
+            po_items_map[product_id].qty_received or 0
+        ) + qty
 
     ledger_service.post_ledger_entry(
         db,
@@ -387,20 +434,26 @@ def create_purchase_return(
     db.add(ret)
     db.flush()
 
-    for line in data.items:
-        product = _get_product(db, line.product_id)
-        prev = product.stock or 0
-        product.stock = prev - line.qty
-        db.add(
-            models.StockTransaction(
-                product_id=line.product_id,
-                change_qty=-line.qty,
-                previous_stock=prev,
-                new_stock=product.stock,
-                reason="purchase_return",
-                reference_id=ret.id,
-            )
+    # Return stock to the branch where the purchase was originally received.
+    return_branch_id = purchase.branch_id
+    if not return_branch_id:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Purchase #{purchase.id} has no branch context; cannot process return.",
         )
+
+    StockService.adjustment(
+        db=db,
+        branch_id=return_branch_id,
+        deltas={line.product_id: -line.qty for line in data.items},
+        reference_type="purchase_return",
+        reference_id=ret.id,
+        user_id=user_id,
+        reason="purchase_return",
+        note=f"Purchase return {ret.return_number}",
+        allow_negative=False,
+    )
 
     ledger_service.post_ledger_entry(
         db,

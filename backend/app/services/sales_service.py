@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from . import ledger_service
+from .stock_service import StockService, InsufficientStockException
 
 
 def _add_months(dt: datetime, months: int) -> Optional[datetime]:
@@ -72,9 +73,21 @@ def create_sale(
     db: Session,
     data,
     user_id: Optional[int] = None,
+    branch_id: Optional[int] = None,
+    idempotency_key: Optional[str] = None,
 ) -> models.Sale:
     if not data.items:
         raise HTTPException(status_code=400, detail="Sale must contain items")
+
+    # Branch is resolved server-side — NEVER accepted from the request payload.
+    if branch_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Branch context required. Assign the user/register to a branch.",
+        )
+    branch = db.get(models.Branch, branch_id)
+    if branch is None or not branch.is_active:
+        raise HTTPException(status_code=400, detail="Invalid or inactive branch")
 
     customer = None
     if data.customer_id is not None:
@@ -82,6 +95,7 @@ def create_sale(
 
     sale_items = []
     subtotal = 0.0
+    stock_deltas: dict[int, int] = {}
     for line in data.items:
         is_adhoc = line.item_type == "AD_HOC" or line.product_id is None
         if is_adhoc:
@@ -107,11 +121,6 @@ def create_sale(
             continue
 
         product = _get_product(db, line.product_id)
-        if product.stock < line.qty:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Not enough stock for '{product.name}' (available: {product.stock})",
-            )
         if product.track_imei:
             if len(line.imeis or []) != line.qty:
                 raise HTTPException(
@@ -137,6 +146,7 @@ def create_sale(
                 line_total=line_total,
             )
         )
+        stock_deltas[product.id] = stock_deltas.get(product.id, 0) + line.qty
 
     subtotal = _round2(subtotal)
     total = _round2(subtotal - data.discount_amount + data.tax_amount)
@@ -185,29 +195,38 @@ def create_sale(
         paid_amount=paid_amount,
         payment_method=payment_method,
         loyalty_points_used=loyalty_points_used,
-        branch_id=getattr(data, 'branch_id', None),
+        branch_id=branch_id,
         created_by=user_id,
         items=sale_items,
     )
     db.add(sale)
     db.flush()
 
+    # Deduct stock through StockService (single write path, branch-scoped).
+    # StockService raises InsufficientStockException if any branch lacks stock.
+    try:
+        StockService.sale(
+            db=db,
+            branch_id=branch_id,
+            deltas=stock_deltas,
+            sale_id=sale.id,
+            idempotency_key=idempotency_key,
+            user_id=user_id,
+        )
+    except InsufficientStockException as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Not enough stock for '{exc.product_name}' at {exc.branch_name or exc.branch_id} "
+                f"(available: {exc.available}, requested: {exc.requested})"
+            ),
+        )
+
     for item, line in zip(sale.items, data.items):
         if item.item_type == "AD_HOC" or item.product_id is None:
             continue
         product = _get_product(db, item.product_id)
-        prev = product.stock or 0
-        product.stock = prev - item.qty
-        db.add(
-            models.StockTransaction(
-                product_id=item.product_id,
-                change_qty=-item.qty,
-                previous_stock=prev,
-                new_stock=product.stock,
-                reason="sale",
-                reference_id=sale.id,
-            )
-        )
         if product.track_imei:
             units = getattr(line, "_units", None)
             if not units:
@@ -392,17 +411,33 @@ def create_sale_return(
 
     for line in data.items:
         product = _get_product(db, line.product_id)
-        prev = product.stock or 0
-        product.stock = prev + line.qty
-        db.add(
-            models.StockTransaction(
-                product_id=line.product_id,
-                change_qty=line.qty,
-                previous_stock=prev,
-                new_stock=product.stock,
-                reason="sale_return",
-                reference_id=ret.id,
+        # Stock goes through StockService (single write path, branch-scoped).
+        # The sale was made at sale.branch_id; return stock to that same branch.
+        return_branch_id = sale.branch_id
+        if not return_branch_id:
+            db.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Sale #{sale.id} has no branch context; cannot process return.",
             )
+
+    try:
+        StockService.sale_return(
+            db=db,
+            original_branch_id=return_branch_id,
+            deltas={line.product_id: line.qty for line in data.items},
+            sale_id=sale.id,
+            return_id=ret.id,
+            user_id=user_id,
+        )
+    except InsufficientStockException as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Stock error processing return for '{exc.product_name}' "
+                f"at branch {exc.branch_id}: {exc}"
+            ),
         )
 
     if sale.customer_id:

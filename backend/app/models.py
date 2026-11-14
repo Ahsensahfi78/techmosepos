@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -627,6 +628,7 @@ class Quotation(Base):
     terms = Column(Text, nullable=True)
     valid_until = Column(DateTime, nullable=True)
     converted_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -849,6 +851,8 @@ class Branch(Base):
     name = Column(String(100), unique=True, nullable=False, index=True)
     code = Column(String(20), unique=True, nullable=False, index=True)
     location = Column(String(200), nullable=True)
+    type = Column(String(20), nullable=False, default="store")  # 'warehouse' | 'store'
+    is_default_receiving = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -865,8 +869,15 @@ class BranchStock(Base):
     branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
     quantity = Column(Integer, nullable=False, default=0)
+    reserved_quantity = Column(Integer, nullable=False, default=0)
+    avg_cost = Column(Float, nullable=False, default=0.0)
+    last_movement_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ux_branch_stocks_product_branch", "product_id", "branch_id", unique=True),
+    )
 
     branch = relationship("Branch", back_populates="stocks")
     product = relationship("Product")
@@ -878,15 +889,25 @@ class StockMovement(Base):
     id = Column(Integer, primary_key=True, index=True)
     branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
-    quantity = Column(Integer, nullable=False)
-    movement_type = Column(String(30), nullable=False, index=True)
-    reference_type = Column(String(30), nullable=True)
+    qty = Column(Integer, nullable=False)  # signed qty (positive = in, negative = out)
+    quantity = Column(Integer, nullable=False, default=0)  # legacy alias, kept in sync
+    movement_type = Column(String(32), nullable=False, index=True)
+    reference_type = Column(String(32), nullable=True)
     reference_id = Column(Integer, nullable=True)
+    idempotency_key = Column(String(64), unique=True, nullable=True, index=True)
+    unit_cost = Column(Float, nullable=True)
+    balance_after = Column(Integer, nullable=False, default=0)
     previous_quantity = Column(Integer, nullable=False, default=0)
     new_quantity = Column(Integer, nullable=False, default=0)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_stock_movements_branch_product_id", "branch_id", "product_id", "id"),
+        Index("ix_stock_movements_reference", "reference_type", "reference_id"),
+        Index("ix_stock_movements_created_at", "created_at"),
+    )
 
     branch = relationship("Branch")
     product = relationship("Product")
@@ -895,8 +916,8 @@ class StockMovement(Base):
 
 class StockTransferStatus(str, enum.Enum):
     PENDING = "pending"
-    APPROVED = "approved"
-    COMPLETED = "completed"
+    DISPATCHED = "dispatched"
+    RECEIVED = "received"
     CANCELLED = "cancelled"
 
 
@@ -908,9 +929,12 @@ class StockTransfer(Base):
     from_branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
     to_branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
     status = Column(String(20), nullable=False, default=StockTransferStatus.PENDING.value, index=True)
+    reference = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    dispatched_at = Column(DateTime, nullable=True)
+    received_at = Column(DateTime, nullable=True)
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     approved_at = Column(DateTime, nullable=True)
     completed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -930,9 +954,12 @@ class StockTransferItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     transfer_id = Column(Integer, ForeignKey("stock_transfers.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    quantity = Column(Integer, nullable=False)
-    from_quantity = Column(Integer, nullable=True)
-    to_quantity = Column(Integer, nullable=True)
+    quantity = Column(Integer, nullable=False)  # qty dispatched from source
+    qty_received = Column(Integer, nullable=False, default=0)  # qty actually received at destination
+
+    __table_args__ = (
+        Index("ux_stock_transfer_items_transfer_product", "transfer_id", "product_id", unique=True),
+    )
 
     transfer = relationship("StockTransfer", back_populates="items")
     product = relationship("Product")

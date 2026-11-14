@@ -99,9 +99,41 @@ const VOICE_SEARCH_VERBS =
 
 export default function PosPage() {
   const { user } = useAuth();
-  const { products, connected, applyOptimisticStock } = useStock();
   const { toast } = useToast();
   const router = useRouter();
+
+  const [branchId, setBranchId] = useState<number | undefined>(undefined);
+  const [branchName, setBranchName] = useState<string | null>(null);
+  const { products, connected, applyOptimisticStock } = useStock(branchId);
+
+  // Resolve user's branch code to branch_id for branch-scoped stock
+  useEffect(() => {
+    if (!user?.branch) {
+      setBranchId(undefined);
+      setBranchName(null);
+      return;
+    }
+    api.branches
+      .list()
+      .then((data) => {
+        const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+        const filteredBranches = isAdmin
+          ? data
+          : data.filter((b) => b.code.toLowerCase() === user!.branch!.toLowerCase());
+        const b = filteredBranches.find((x) => x.code.toLowerCase() === user!.branch!.toLowerCase());
+        if (b) {
+          setBranchId(b.id);
+          setBranchName(b.name);
+        } else {
+          setBranchId(undefined);
+          setBranchName(null);
+        }
+      })
+      .catch(() => {
+        setBranchId(undefined);
+        setBranchName(null);
+      });
+  }, [user?.branch, user?.role]);
 
   const [cart, setCart] = useState<CartLine[]>([]);
   const [search, setSearch] = useState("");
@@ -1836,6 +1868,11 @@ export default function PosPage() {
                     <p className="text-[11px] font-medium text-slate-400">
                       {p.category}
                     </p>
+                    {p.warranty_months && p.warranty_months > 0 && (
+                      <p className="text-[11px] font-medium text-blue-600">
+                        🛡️ Warranty {p.warranty_months} months
+                      </p>
+                    )}
                     <div className="mt-2 flex items-center justify-between">
                       <span className="text-base font-bold text-emerald-600">
                         {formatMoney(p.price)}

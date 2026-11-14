@@ -257,7 +257,8 @@ export const api = {
     },
   },
   products: {
-    list: () => request<Product[]>("/products"),
+    list: (branch_id?: number) =>
+      request<Product[]>(`/products${branch_id ? `?branch_id=${branch_id}` : ""}`),
     nextCode: () => request<{ code: string }>("/products/next-code"),
     create: (data: ProductCreateInput) =>
       request<Product>("/products", {
@@ -298,6 +299,42 @@ export const api = {
         method: "POST",
         body: JSON.stringify(data),
       }),
+    receipt: (id: number) =>
+      request<{
+        id: number;
+        reference: string;
+        date: string;
+        customer_name?: string | null;
+        customer_phone?: string | null;
+        cashier_name?: string | null;
+        items: Array<{
+          product_id?: number | null;
+          product_name: string;
+          qty: number;
+          price: number;
+          line_total: number;
+          sku?: string | null;
+          barcode?: string | null;
+        }>;
+        subtotal: number;
+        discount_amount: number;
+        tax_amount: number;
+        total: number;
+        paid_amount: number;
+        due_amount: number;
+        change_amount: number;
+        payment_method?: string | null;
+        loyalty_points_used: number;
+        store_name: string;
+        store_address: string;
+        store_phone: string;
+        store_email: string;
+        store_logo: string;
+        currency: string;
+        receipt_footer: string;
+        receipt_width_mm: string;
+        receipt_rotate_180: string;
+      }>(`/sales/${id}/receipt`),
   },
   reports: {
     stock: () => request<StockReport>("/reports/stock"),

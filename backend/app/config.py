@@ -2,7 +2,7 @@ import os
 
 SECRET_KEY = os.getenv("SECRET_KEY", "pos-super-secret-key-change-in-production-2024")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 480
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}

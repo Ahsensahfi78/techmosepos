@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
@@ -34,8 +35,8 @@ def get_products(
     return query.order_by(models.Product.name).all()
 
 
-def create_product(db: Session, data: schemas.ProductCreate) -> models.Product:
-    payload = data.model_dump(exclude={"auto_generate"})
+def create_product(db: Session, data: schemas.ProductCreate, branch_id: int | None = None) -> models.Product:
+    payload = data.model_dump(exclude={"auto_generate", "branch_id"})
     sku = (payload.get("sku") or "").strip() or None
     barcode = (payload.get("barcode") or "").strip() or None
 
@@ -45,7 +46,12 @@ def create_product(db: Session, data: schemas.ProductCreate) -> models.Product:
         # Displayed code was taken between generation and save (offline queue
         # or a concurrent user) — issue a fresh one instead of failing.
         sku = product_code_service.next_product_code(db)
-    if barcode is None:
+
+    # When auto-generating, barcode always mirrors the final SKU to avoid
+    # cross-field conflicts (e.g. barcode still holding the old conflicted code).
+    if data.auto_generate:
+        barcode = sku
+    elif barcode is None:
         barcode = sku
 
     product_code_service.validate_product_codes(db, sku=sku, barcode=barcode)
@@ -69,6 +75,26 @@ def create_product(db: Session, data: schemas.ProductCreate) -> models.Product:
             payload["barcode"] = payload["sku"]
             continue
         db.refresh(product)
+
+        # Create initial branch_stock row at the entered stock quantity for the
+        # receiving branch.  products.stock is a derived aggregate (SUM of
+        # branch_stocks.quantity) kept in sync by DB triggers, so we must seed
+        # branch_stocks with the stock the user actually entered — otherwise the
+        # trigger immediately resets products.stock back to 0.
+        if branch_id is not None:
+            initial_qty = int(payload.get("stock") or 0)
+            db.add(
+                models.BranchStock(
+                    branch_id=branch_id,
+                    product_id=product.id,
+                    quantity=initial_qty,
+                    reserved_quantity=0,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            db.commit()
+
         return product
     raise HTTPException(status_code=400, detail="Could not create a unique product code")
 
@@ -109,6 +135,12 @@ def delete_product(db: Session, product_id: int) -> None:
 
 
 def create_sale(db: Session, data: schemas.SaleIn) -> models.Sale:
+    """Legacy sale creation — stock is now handled by StockService.
+
+    This function is kept for backward compatibility but no longer writes
+    to products.stock. Use sales_service.create_sale (which routes through
+    StockService) for all new sales.
+    """
     if not data.items:
         raise HTTPException(status_code=400, detail="Sale must contain items")
 
@@ -122,14 +154,9 @@ def create_sale(db: Session, data: schemas.SaleIn) -> models.Sale:
         if product is None:
             db.rollback()
             raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
-        if product.stock < item.qty:
-            db.rollback()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Not enough stock for '{product.name}' (available: {product.stock})",
-            )
 
-        product.stock -= item.qty
+        # NOTE: stock deduction is now handled by StockService.apply in
+        # sales_service.create_sale. Do NOT write product.stock here.
         line_total = product.price * item.qty
         total += line_total
 

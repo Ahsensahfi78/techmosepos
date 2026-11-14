@@ -48,6 +48,7 @@ def create_quotation(
     db: Session,
     data: schemas.QuotationIn,
     user_id: int | None = None,
+    branch_id: int | None = None,
 ) -> models.Quotation:
     cust_name, cust_phone, cust_address, cust_type = _resolve_customer_info(
         db, data.customer_id, data.customer_name, data.customer_phone, data.customer_address, data.customer_type
@@ -111,6 +112,7 @@ def create_quotation(
         terms=data.terms,
         valid_until=data.valid_until,
         created_by=user_id,
+        branch_id=branch_id,
         items=items,
     )
     db.add(quotation)
@@ -208,6 +210,7 @@ def convert_quotation(
     payment_method: str,
     paid: float,
     user_id: int | None = None,
+    branch_id: int | None = None,
 ) -> tuple[models.Sale, bool]:
     quotation = _get_quotation(db, quotation_id)
     # Server-side validation: If already converted, return existing sale idempotently without error
@@ -265,7 +268,7 @@ def convert_quotation(
         payment_method=payment_method,
         paid_amount=paid,
     )
-    sale = sales_service.create_sale(db, sale_data, user_id=user_id)
+    sale = sales_service.create_sale(db, sale_data, user_id=user_id, branch_id=branch_id)
 
     quotation.status = models.QuotationStatus.CONVERTED.value
     quotation.converted_sale_id = sale.id

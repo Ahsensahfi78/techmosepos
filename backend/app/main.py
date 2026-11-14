@@ -38,9 +38,9 @@ from .routers import (
 
 
 BRANCH_CREDENTIALS = [
-    {"username": "kalmunai", "branch": "kalmunai", "email": "kalmunai@shoplypos.local", "full_name": "Kalmunai Branch"},
-    {"username": "kaluvanchikuti", "branch": "kaluvanchikuti", "email": "kaluvanchikuti@shoplypos.local", "full_name": "Kaluvanchikuti Branch"},
-    {"username": "batticalo", "branch": "batticalo", "email": "batticalo@shoplypos.local", "full_name": "Batticalo Branch"},
+    {"username": "kalmunai", "branch": "KLM", "email": "kalmunai@shoplypos.local", "full_name": "Kalmunai Branch"},
+    {"username": "kaluvanchikuti", "branch": "KLV", "email": "kaluvanchikuti@shoplypos.local", "full_name": "Kaluvanchikuti Branch"},
+    {"username": "batticalo", "branch": "BTC", "email": "batticalo@shoplypos.local", "full_name": "Batticalo Branch"},
 ]
 
 DEFAULT_BRANCH_PASSWORD = "branch123"
@@ -99,10 +99,18 @@ app.add_middleware(AuthMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
+    + ([os.getenv("FRONTEND_URL")] if os.getenv("FRONTEND_URL") else []),
+    allow_origin_regex=r"https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.include_router(auth.router)

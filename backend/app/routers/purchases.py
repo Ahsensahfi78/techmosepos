@@ -12,6 +12,29 @@ from ..services import purchase_service
 router = APIRouter(tags=["purchases"])
 
 
+def _resolve_user_branch(db: Session, current: models.User) -> int | None:
+    """Resolve the branch a user is allowed to access. Returns None for admins."""
+    if current.role in ("super_admin", "admin"):
+        return None  # admin can see all branches
+    if current.branch:
+        branch = db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
+        return branch.id if branch else None
+    return None
+
+
+def _require_branch_access(db: Session, current: models.User, branch_id: int | None) -> None:
+    """Raise 403 if a branch-scoped user tries to access a different branch."""
+    if current.role in ("super_admin", "admin"):
+        return
+    if branch_id is None:
+        return  # No branch on the record, allow
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id != branch_id:
+        raise HTTPException(
+            status_code=403, detail="Access restricted to your own branch"
+        )
+
+
 def _po_out(po: models.PurchaseOrder) -> schemas.PurchaseOrderOut:
     return schemas.PurchaseOrderOut(
         id=po.id,
@@ -111,7 +134,20 @@ def create_purchase_order(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("purchase.manage")),
 ):
-    po = purchase_service.create_purchase_order(db, data, user_id=current.id)
+    # Branch resolved server-side from the authenticated user — never from payload.
+    branch_id = None
+    if current.branch:
+        branch_row = (
+            db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
+        )
+        if branch_row:
+            branch_id = branch_row.id
+    if not branch_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No branch assigned to this user. Contact an administrator.",
+        )
+    po = purchase_service.create_purchase_order(db, data, user_id=current.id, branch_id=branch_id)
     AuditLogRepository(db).log(
         action="purchase_order.create",
         entity_type="purchase_order",
@@ -130,11 +166,16 @@ def list_purchase_orders(
     supplier_id: int | None = Query(default=None),
     search: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("purchase.view")),
+    current: models.User = Depends(require_permission("purchase.view")),
 ):
     items, total, total_pages = purchase_service.list_purchase_orders(
         db, page=page, page_size=page_size, status=status, supplier_id=supplier_id, search=search
     )
+    # Branch-scoped users only see their own branch's POs
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id is not None:
+        items = [po for po in items if po.branch_id == user_branch_id]
+        total = len(items)
     return schemas.Paginated[schemas.PurchaseOrderOut](
         items=[_po_out(po) for po in items],
         total=total,
@@ -148,9 +189,13 @@ def list_purchase_orders(
 def get_purchase_order(
     po_id: int,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("purchase.view")),
+    current: models.User = Depends(require_permission("purchase.view")),
 ):
-    return _po_out(purchase_service.get_purchase_order(db, po_id))
+    po = purchase_service.get_purchase_order(db, po_id)
+    if po is None:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    _require_branch_access(db, current, po.branch_id)
+    return _po_out(po)
 
 
 @router.post("/purchase-orders/{po_id}/receive", response_model=schemas.PurchaseOut, status_code=201)
@@ -160,7 +205,17 @@ def receive_purchase_order(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("purchase.manage")),
 ):
-    purchase = purchase_service.receive_purchase_order(db, po_id, data, user_id=current.id)
+    # Resolve receiving branch server-side from the authenticated user.
+    branch_id = None
+    if current.branch:
+        branch_row = (
+            db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
+        )
+        if branch_row:
+            branch_id = branch_row.id
+    purchase = purchase_service.receive_purchase_order(
+        db, po_id, data, user_id=current.id, branch_id=branch_id
+    )
     AuditLogRepository(db).log(
         action="purchase.receive",
         entity_type="purchase",
@@ -178,6 +233,7 @@ def cancel_purchase_order(
     current: models.User = Depends(require_permission("purchase.manage")),
 ):
     po = purchase_service.cancel_purchase_order(db, po_id, user_id=current.id)
+    _require_branch_access(db, current, po.branch_id)
     AuditLogRepository(db).log(
         action="purchase_order.cancel",
         entity_type="purchase_order",
@@ -197,11 +253,16 @@ def list_purchases(
     supplier_id: int | None = Query(default=None),
     search: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("purchase.view")),
+    current: models.User = Depends(require_permission("purchase.view")),
 ):
     items, total, total_pages = purchase_service.list_purchases(
         db, page=page, page_size=page_size, status=status, supplier_id=supplier_id, search=search
     )
+    # Branch-scoped users only see their own branch's purchases
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id is not None:
+        items = [p for p in items if p.branch_id == user_branch_id]
+        total = len(items)
     return schemas.Paginated[schemas.PurchaseOut](
         items=[_purchase_out(p) for p in items],
         total=total,
@@ -215,9 +276,13 @@ def list_purchases(
 def get_purchase(
     purchase_id: int,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("purchase.view")),
+    current: models.User = Depends(require_permission("purchase.view")),
 ):
-    return _purchase_out(purchase_service.get_purchase(db, purchase_id))
+    p = purchase_service.get_purchase(db, purchase_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    _require_branch_access(db, current, p.branch_id)
+    return _purchase_out(p)
 
 
 @router.post("/purchases/{purchase_id}/payments", response_model=schemas.PaymentOut, status_code=201)
@@ -227,6 +292,10 @@ def record_purchase_payment(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("purchase.manage")),
 ):
+    p = purchase_service.get_purchase(db, purchase_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    _require_branch_access(db, current, p.branch_id)
     payment = purchase_service.record_purchase_payment(db, purchase_id, data, user_id=current.id)
     AuditLogRepository(db).log(
         action="purchase.payment",
@@ -246,6 +315,7 @@ def create_purchase_return(
     current: models.User = Depends(require_permission("purchase.manage")),
 ):
     ret = purchase_service.create_purchase_return(db, purchase_id, data, user_id=current.id)
+    _require_branch_access(db, current, ret.purchase.branch_id)
     AuditLogRepository(db).log(
         action="purchase.return",
         entity_type="purchase_return",
@@ -263,11 +333,16 @@ def list_purchase_returns(
     supplier_id: int | None = Query(default=None),
     purchase_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("purchase.view")),
+    current: models.User = Depends(require_permission("purchase.view")),
 ):
     items, total, total_pages = purchase_service.list_purchase_returns(
         db, page=page, page_size=page_size, supplier_id=supplier_id, purchase_id=purchase_id
     )
+    # Branch-scoped users only see returns from their own branch's purchases
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id is not None:
+        items = [r for r in items if r.purchase.branch_id == user_branch_id]
+        total = len(items)
     return schemas.Paginated[schemas.PurchaseReturnOut](
         items=[_return_out(r) for r in items],
         total=total,

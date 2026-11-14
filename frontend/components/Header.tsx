@@ -15,7 +15,7 @@ const primaryLinks = [
   { href: "/quotations", label: "Quotations", icon: "📄" },
   { href: "/repairs", label: "Repairs", icon: "🔧" },
   { href: "/ezcash", label: "EZ Cash", icon: "📱" },
-  { href: "/products", label: "Products", icon: "📦", adminOnly: true },
+  { href: "/products", label: "Products", icon: "📦" },
   { href: "/customers", label: "Customers", icon: "🧑‍🤝‍🧑" },
   { href: "/reports", label: "Reports", icon: "📈", adminOnly: true },
 ];
@@ -25,7 +25,7 @@ const secondaryLinks = [
   { href: "/transactions", label: "Transactions", icon: "🔄" },
   { href: "/purchases", label: "Purchases", icon: "📦", staff: true },
   { href: "/suppliers", label: "Suppliers", icon: "🚚", staff: true },
-  { href: "/quotations", label: "Quotations", icon: "📄", staff: true },
+  { href: "/quotations", label: "Quotations", icon: "📄" },
   { href: "/expenses", label: "Expenses & Income", icon: "💸", staff: true },
   { href: "/cheques", label: "Cheques", icon: "💳", staff: true },
   { href: "/inventory", label: "Inventory", icon: "🧮", staff: true },

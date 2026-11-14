@@ -16,6 +16,7 @@ export const ALL_PERMISSIONS = [
   "purchase.manage",
   "purchase.view",
   "product.manage",
+  "product.create",
   "product.view",
   "inventory.manage",
   "inventory.view",
@@ -83,6 +84,8 @@ const CASHIER_PERMISSIONS = new Set<string>([
   "pos.access",
   "sales.create",
   "sales.view",
+  "sales.return",
+  "product.create",
   "product.view",
   "inventory.view",
   "customer.manage",
@@ -90,10 +93,13 @@ const CASHIER_PERMISSIONS = new Set<string>([
   "warehouse.view",
   "warranty.view",
   "repair.view",
+  "repair.manage",
   "ezcash.view",
   "ezcash.create",
   "barcode.print",
   "branch.view",
+  "quotation.view",
+  "quotation.manage",
 ]);
 
 export const ROLE_PERMISSIONS: Record<string, ReadonlySet<string>> = {

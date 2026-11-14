@@ -39,6 +39,33 @@ def _normalize_status(s: str | None) -> str:
     return _STATUS_MAP.get(raw, raw)
 
 
+def _resolve_user_branch(db: Session, current: models.User) -> int | None:
+    """Resolve the branch a user is allowed to access. Returns None for admins."""
+    if current.role in ("super_admin", "admin"):
+        return None  # admin can see all branches
+    if current.branch:
+        branch = (
+            db.query(models.Branch)
+            .filter(models.Branch.code.ilike(current.branch))
+            .first()
+        )
+        return branch.id if branch else None
+    return None
+
+
+def _require_branch_access(db: Session, current: models.User, branch_id: int | None) -> None:
+    """Raise 403 if a branch-scoped user tries to access a different branch."""
+    if current.role in ("super_admin", "admin"):
+        return
+    if branch_id is None:
+        return  # No branch on the record, allow
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id != branch_id:
+        raise HTTPException(
+            status_code=403, detail="Access restricted to your own branch"
+        )
+
+
 def _out(r: models.Repair) -> schemas.RepairOut:
     items_total = sum(float(i.line_total or 0) for i in r.items) if r.items else 0.0
     calc_total = items_total if items_total > 0 else (float(r.service_charge or 0) + float(r.parts_cost or 0))
@@ -147,6 +174,20 @@ def create_repair(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("repair.manage")),
 ):
+    # Branch resolved server-side from the authenticated user — never from payload.
+    branch_id = None
+    if current.branch:
+        branch_row = (
+            db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
+        )
+        if branch_row:
+            branch_id = branch_row.id
+    if not branch_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No branch assigned to this user. Contact an administrator.",
+        )
+
     cust_name = data.customer_name
     cust_phone = data.customer_phone
     cust_address = data.customer_address
@@ -188,6 +229,7 @@ def create_repair(
         notes=data.notes,
         terms=data.terms,
         received_by=current.id,
+        branch_id=branch_id,
         items=repair_items,
     )
     db.add(repair)
@@ -210,7 +252,7 @@ def list_repairs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("repair.view")),
+    current: models.User = Depends(require_permission("repair.view")),
 ):
     query = db.query(models.Repair)
     if status and status != "all":
@@ -224,6 +266,10 @@ def list_repairs(
             | (models.Repair.imei.ilike(like))
             | (models.Repair.customer_name.ilike(like))
         )
+    # Branch-scoped users only see their own branch's repairs
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id is not None:
+        query = query.filter(models.Repair.branch_id == user_branch_id)
     total = query.count()
     rows = (
         query.order_by(models.Repair.created_at.desc())
@@ -244,11 +290,12 @@ def list_repairs(
 def get_repair(
     repair_id: int,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("repair.view")),
+    current: models.User = Depends(require_permission("repair.view")),
 ):
     repair = db.get(models.Repair, repair_id)
     if repair is None:
         raise HTTPException(status_code=404, detail="Repair not found")
+    _require_branch_access(db, current, repair.branch_id)
     return _out(repair)
 
 
@@ -263,6 +310,8 @@ def update_repair(
     repair = db.get(models.Repair, repair_id)
     if repair is None:
         raise HTTPException(status_code=404, detail="Repair not found")
+    _require_branch_access(db, current, repair.branch_id)
+
     if data.customer_id is not None:
         cust = db.get(models.Customer, data.customer_id)
         if cust:
@@ -341,6 +390,7 @@ def update_repair_status(
     repair = db.get(models.Repair, repair_id)
     if repair is None:
         raise HTTPException(status_code=404, detail="Repair not found")
+    _require_branch_access(db, current, repair.branch_id)
 
     new_status = _normalize_status(data.status)
     repair.status = new_status
@@ -366,6 +416,7 @@ def record_repair_payment(
     repair = db.get(models.Repair, repair_id)
     if repair is None:
         raise HTTPException(status_code=404, detail="Repair not found")
+    _require_branch_access(db, current, repair.branch_id)
     items_total = sum(float(i.line_total or 0) for i in repair.items) if repair.items else 0.0
     calc_total = items_total if items_total > 0 else (float(repair.service_charge or 0) + float(repair.parts_cost or 0))
     total = round(calc_total, 2)
@@ -397,6 +448,7 @@ def delete_repair(
     repair = db.get(models.Repair, repair_id)
     if repair is None:
         raise HTTPException(status_code=404, detail="Repair not found")
+    _require_branch_access(db, current, repair.branch_id)
     out = _out(repair)
     db.delete(repair)
     db.commit()

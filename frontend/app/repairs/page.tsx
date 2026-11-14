@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, master } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { can } from "@/lib/nlp";
 import { useToast } from "@/components/ui/Toast";
 import EmptyState from "@/components/ui/EmptyState";
 import Modal from "@/components/ui/Modal";
@@ -36,8 +37,7 @@ const FILTERS = [
 export default function RepairsPage() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const canManage =
-    user?.role === "super_admin" || user?.role === "admin" || user?.role === "manager";
+  const canManage = can(user?.role, "repair.manage");
 
   const [repairs, setRepairs] = useState<Repair[]>([]);
   const [total, setTotal] = useState(0);

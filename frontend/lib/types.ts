@@ -46,6 +46,8 @@ export interface ProductCreateInput {
   product_type?: string;
   unit?: string;
   min_stock?: number;
+  warranty_months?: number | null;
+  branch_id?: number;
   description?: string;
   auto_generate?: boolean;
 }
@@ -638,6 +640,7 @@ export interface ReceiptBrand {
   store_phone?: string;
   store_email?: string;
   store_logo?: string;
+  currency?: string;
   receipt_footer?: string;
   receipt_width_mm?: string;
   /** "true" prints the receipt upside down — for printers that feed the roll that way. */

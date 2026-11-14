@@ -11,6 +11,29 @@ from ..services import quotation_service
 router = APIRouter(prefix="/quotations", tags=["quotations"])
 
 
+def _resolve_user_branch(db: Session, current: models.User) -> int | None:
+    """Resolve the branch a user is allowed to access. Returns None for admins."""
+    if current.role in ("super_admin", "admin"):
+        return None  # admin can see all branches
+    if current.branch:
+        branch = db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
+        return branch.id if branch else None
+    return None
+
+
+def _require_branch_access(db: Session, current: models.User, branch_id: int | None) -> None:
+    """Raise 403 if a branch-scoped user tries to access a different branch."""
+    if current.role in ("super_admin", "admin"):
+        return
+    if branch_id is None:
+        return  # No branch on the record, allow
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id != branch_id:
+        raise HTTPException(
+            status_code=403, detail="Access restricted to your own branch"
+        )
+
+
 def _out(q: models.Quotation) -> schemas.QuotationOut:
     cust_name = q.customer_name or (q.customer.name if q.customer else None)
     cust_phone = q.customer_phone or (q.customer.phone if q.customer else None)
@@ -64,7 +87,20 @@ def create_quotation(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("quotation.manage")),
 ):
-    quotation = quotation_service.create_quotation(db, data, user_id=current.id)
+    # Branch resolved server-side from the authenticated user — never from payload.
+    branch_id = None
+    if current.branch:
+        branch_row = (
+            db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
+        )
+        if branch_row:
+            branch_id = branch_row.id
+    if not branch_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No branch assigned to this user. Contact an administrator.",
+        )
+    quotation = quotation_service.create_quotation(db, data, user_id=current.id, branch_id=branch_id)
     AuditLogRepository(db).log(
         action="quotation.create",
         entity_type="quotation",
@@ -82,11 +118,16 @@ def list_quotations(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("quotation.view")),
+    current: models.User = Depends(require_permission("quotation.view")),
 ):
     items, total, total_pages = quotation_service.list_quotations(
         db, page=page, page_size=page_size, status=status, q=q
     )
+    # Branch-scoped users only see their own branch's quotations
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id is not None:
+        items = [qu for qu in items if qu.branch_id == user_branch_id]
+        total = len(items)
     return schemas.Paginated[schemas.QuotationOut](
         items=[_out(qu) for qu in items],
         total=total,
@@ -100,9 +141,12 @@ def list_quotations(
 def get_quotation(
     quotation_id: int,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_permission("quotation.view")),
+    current: models.User = Depends(require_permission("quotation.view")),
 ):
     quotation = quotation_service._get_quotation(db, quotation_id)
+    if quotation is None:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    _require_branch_access(db, current, quotation.branch_id)
     return _out(quotation)
 
 
@@ -113,6 +157,10 @@ def update_quotation(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("quotation.manage")),
 ):
+    quotation = quotation_service._get_quotation(db, quotation_id)
+    if quotation is None:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    _require_branch_access(db, current, quotation.branch_id)
     quotation = quotation_service.update_quotation(db, quotation_id, data, user_id=current.id)
     AuditLogRepository(db).log(
         action="quotation.update",
@@ -132,6 +180,9 @@ def update_quotation_status(
     current: models.User = Depends(require_permission("quotation.manage")),
 ):
     quotation = quotation_service._get_quotation(db, quotation_id)
+    if quotation is None:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    _require_branch_access(db, current, quotation.branch_id)
     if quotation.status == models.QuotationStatus.CONVERTED.value:
         if data.status == models.QuotationStatus.CONVERTED.value:
             return _out(quotation)
@@ -206,6 +257,9 @@ def delete_quotation(
     current: models.User = Depends(require_permission("quotation.manage")),
 ):
     quotation = quotation_service._get_quotation(db, quotation_id)
+    if quotation is None:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    _require_branch_access(db, current, quotation.branch_id)
     if quotation.status == models.QuotationStatus.CONVERTED.value:
         raise HTTPException(status_code=400, detail="Converted quotations cannot be deleted")
     out = _out(quotation)

@@ -6,8 +6,32 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..permissions import require_permission
+from ..services.stock_service import StockService, InsufficientStockException
 
 router = APIRouter(prefix="/transfers", tags=["transfers"])
+
+
+def _resolve_user_branch(db: Session, current: models.User) -> int | None:
+    """Resolve the branch a user is allowed to access. Returns None for admins."""
+    if current.role in ("super_admin", "admin"):
+        return None  # admin can see all branches
+    if current.branch:
+        branch = db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
+        return branch.id if branch else None
+    return None
+
+
+def _require_branch_access(db: Session, current: models.User, branch_id: int | None) -> None:
+    """Raise 403 if a branch-scoped user tries to access a different branch."""
+    if current.role in ("super_admin", "admin"):
+        return
+    if branch_id is None:
+        return  # No branch on the record, allow
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id != branch_id:
+        raise HTTPException(
+            status_code=403, detail="Access restricted to your own branch"
+        )
 
 
 def _next_number(db: Session) -> str:
@@ -56,12 +80,19 @@ def list_transfers(
     status: str = Query(default=None),
     branch_id: int = Query(default=None),
     db: Session = Depends(get_db),
-    _current: models.User = Depends(require_permission("transfer.view")),
+    current: models.User = Depends(require_permission("transfer.view")),
 ):
     q = db.query(models.StockTransfer)
     if status:
         q = q.filter(models.StockTransfer.status == status)
-    if branch_id:
+    # Branch-scoped users only see transfers involving their own branch
+    user_branch_id = _resolve_user_branch(db, current)
+    if user_branch_id is not None:
+        q = q.filter(
+            (models.StockTransfer.from_branch_id == user_branch_id)
+            | (models.StockTransfer.to_branch_id == user_branch_id)
+        )
+    elif branch_id:
         q = q.filter(
             (models.StockTransfer.from_branch_id == branch_id)
             | (models.StockTransfer.to_branch_id == branch_id)
@@ -73,11 +104,13 @@ def list_transfers(
 def get_transfer(
     transfer_id: int,
     db: Session = Depends(get_db),
-    _current: models.User = Depends(require_permission("transfer.view")),
+    current: models.User = Depends(require_permission("transfer.view")),
 ):
     t = db.get(models.StockTransfer, transfer_id)
     if not t:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_branch_access(db, current, t.from_branch_id)
+    _require_branch_access(db, current, t.to_branch_id)
     return _out(t, db)
 
 
@@ -87,6 +120,20 @@ def create_transfer(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("transfer.manage")),
 ):
+    # Branch-scoped users can only create transfers from their own branch
+    user_branch_id = _resolve_user_branch(db, current)
+    if current.role not in ("super_admin", "admin"):
+        if not user_branch_id:
+            raise HTTPException(
+                status_code=400,
+                detail="No branch assigned to this user. Contact an administrator.",
+            )
+        if data.from_branch_id != user_branch_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only create transfers from your own branch",
+            )
+
     from_branch = db.get(models.Branch, data.from_branch_id)
     if not from_branch:
         raise HTTPException(status_code=404, detail="Source branch not found")
@@ -158,6 +205,8 @@ def approve_transfer(
     transfer = db.get(models.StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_branch_access(db, current, transfer.from_branch_id)
+    _require_branch_access(db, current, transfer.to_branch_id)
     if transfer.status != models.StockTransferStatus.PENDING.value:
         raise HTTPException(status_code=400, detail="Transfer is not pending")
     transfer.status = models.StockTransferStatus.APPROVED.value
@@ -177,44 +226,71 @@ def complete_transfer(
     transfer = db.get(models.StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_branch_access(db, current, transfer.from_branch_id)
+    _require_branch_access(db, current, transfer.to_branch_id)
     if transfer.status != models.StockTransferStatus.APPROVED.value:
         raise HTTPException(status_code=400, detail="Transfer must be approved first")
 
+    # Dispatch: stock leaves the source branch via StockService (transfer_out).
+    out_deltas: dict[int, int] = {}
     for item in transfer.items:
-        from_stock = (
-            db.query(models.BranchStock)
-            .filter(
-                models.BranchStock.branch_id == transfer.from_branch_id,
-                models.BranchStock.product_id == item.product_id,
-            )
-            .first()
-        )
-        if not from_stock or from_stock.quantity < item.quantity:
-            product = db.get(models.Product, item.product_id)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient stock for {product.name if product else item.product_id}",
-            )
+        out_deltas[item.product_id] = out_deltas.get(item.product_id, 0) + item.quantity
 
-        from_stock.quantity -= item.quantity
-
-        to_stock = (
-            db.query(models.BranchStock)
-            .filter(
-                models.BranchStock.branch_id == transfer.to_branch_id,
-                models.BranchStock.product_id == item.product_id,
-            )
-            .first()
+    try:
+        StockService.transfer_out(
+            db=db,
+            branch_id=transfer.from_branch_id,
+            deltas=out_deltas,
+            transfer_id=transfer.id,
+            idempotency_key=None,
+            user_id=current.id,
         )
-        if to_stock:
-            to_stock.quantity += item.quantity
-        else:
-            to_stock = models.BranchStock(
-                branch_id=transfer.to_branch_id,
-                product_id=item.product_id,
-                quantity=item.quantity,
+    except InsufficientStockException as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Insufficient stock for '{exc.product_name}' at source branch {exc.branch_id} "
+                f"(available: {exc.available}, requested: {exc.requested})"
+            ),
+        )
+
+    # Receive: stock arrives at destination via StockService (transfer_in).
+    # Shortfall (qty_received < qty) becomes a balancing adjustment at source.
+    for item in transfer.items:
+        received = item.qty_received or 0
+        dispatched = item.quantity
+
+        if received > 0:
+            in_deltas = {item.product_id: received}
+            try:
+                StockService.transfer_in(
+                    db=db,
+                    branch_id=transfer.to_branch_id,
+                    deltas=in_deltas,
+                    transfer_id=transfer.id,
+                    idempotency_key=None,
+                    user_id=current.id,
+                )
+            except InsufficientStockException:
+                # transfer_in should never fail on a positive delta
+                pass
+
+        shortfall = dispatched - received
+        if shortfall > 0:
+            # Shortfall becomes a damage/write_off at the source so the ledger balances.
+            # allow_negative=True because missing stock is a write-off, not a sale.
+            StockService.adjustment(
+                db=db,
+                branch_id=transfer.from_branch_id,
+                deltas={item.product_id: -shortfall},
+                reference_type="stock_transfer",
+                reference_id=transfer.id,
+                idempotency_key=None,
+                user_id=current.id,
+                reason="damage",
+                note=f"Shortfall on transfer #{transfer.id}",
+                allow_negative=True,
             )
-            db.add(to_stock)
 
     transfer.status = models.StockTransferStatus.COMPLETED.value
     transfer.completed_by = current.id
@@ -233,6 +309,8 @@ def cancel_transfer(
     transfer = db.get(models.StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_branch_access(db, current, transfer.from_branch_id)
+    _require_branch_access(db, current, transfer.to_branch_id)
     if transfer.status in (
         models.StockTransferStatus.COMPLETED.value,
         models.StockTransferStatus.CANCELLED.value,

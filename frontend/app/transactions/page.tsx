@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth-context";
 import PageHeader from "@/components/ui/PageHeader";
 import EmptyState from "@/components/ui/EmptyState";
 import Modal from "@/components/ui/Modal";
+import ReprintReceiptModal from "@/components/ReprintReceiptModal";
 import type {
   RelatedTransaction,
   TransactionDetail,
@@ -144,6 +145,8 @@ function TransactionsInner() {
   );
   const [detail, setDetail] = useState<TransactionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [reprintOpen, setReprintOpen] = useState(false);
+  const [reprintSaleId, setReprintSaleId] = useState<number | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -547,9 +550,18 @@ function TransactionsInner() {
           <TransactionDetailView
             detail={detail}
             onOpen={(type, id) => openDetail({ type, db_id: id })}
+            onPrintReceipt={() => {
+              setReprintSaleId(detail.db_id);
+              setReprintOpen(true);
+            }}
           />
         )}
       </Modal>
+      <ReprintReceiptModal
+        open={reprintOpen}
+        saleId={reprintSaleId ?? 0}
+        onClose={() => setReprintOpen(false)}
+      />
     </div>
   );
 }
@@ -557,9 +569,11 @@ function TransactionsInner() {
 function TransactionDetailView({
   detail,
   onOpen,
+  onPrintReceipt,
 }: {
   detail: TransactionDetail;
   onOpen: (type: string, id: number) => void;
+  onPrintReceipt?: () => void;
 }) {
   const meta = TYPE_META[detail.type] ?? { label: detail.type, tone: "bg-slate-100 text-slate-600" };
 
@@ -847,6 +861,14 @@ function TransactionDetailView({
         >
           Open {detail.type.includes("purchase") ? "Purchases" : "Sales"} module
         </a>
+        {detail.type === "sale" && onPrintReceipt && (
+          <button
+            onClick={onPrintReceipt}
+            className="btn btn-secondary btn-sm"
+          >
+            🖨 Print receipt
+          </button>
+        )}
       </div>
     </div>
   );

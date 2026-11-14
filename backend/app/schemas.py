@@ -369,6 +369,7 @@ class ProductBase(BaseModel):
 
 class ProductCreate(ProductBase):
     auto_generate: bool = False
+    branch_id: Optional[int] = None
 
 
 class ProductCodeOut(BaseModel):
@@ -453,6 +454,7 @@ class SaleItemOut(BaseModel):
 
 class SaleOut(BaseModel):
     id: int
+    branch_id: int
     customer_id: Optional[int] = None
     customer_name: Optional[str] = None
     status: str
@@ -467,6 +469,49 @@ class SaleOut(BaseModel):
     created_by_name: Optional[str] = None
     created_at: datetime
     items: List[SaleItemOut]
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Sale receipt (reprint) ─────────────────────────────────────────────
+
+class SaleReceiptItemOut(BaseModel):
+    product_id: Optional[int] = None
+    product_name: str
+    qty: int
+    price: float
+    line_total: float
+    sku: Optional[str] = None
+    barcode: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SaleReceiptOut(BaseModel):
+    id: int
+    reference: str
+    date: datetime
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    cashier_name: Optional[str] = None
+    items: List[SaleReceiptItemOut]
+    subtotal: float
+    discount_amount: float
+    tax_amount: float
+    total: float
+    paid_amount: float
+    due_amount: float
+    change_amount: float
+    payment_method: Optional[str] = None
+    loyalty_points_used: int
+    # Print settings (from settings table)
+    store_name: str
+    store_address: str
+    store_phone: str
+    store_email: str
+    store_logo: str
+    currency: str
+    receipt_footer: str
+    receipt_width_mm: str
+    receipt_rotate_180: str
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -811,6 +856,7 @@ class QuotationIn(BaseModel):
     terms: Optional[str] = Field(default=None, max_length=2000)
     valid_until: Optional[datetime] = None
     items: List[QuotationItemIn] = Field(min_length=1)
+    branch_id: Optional[int] = None
 
 
 class QuotationUpdateIn(BaseModel):
@@ -1354,4 +1400,82 @@ class StockTransferOut(BaseModel):
     completed_by: Optional[int] = None
     completed_at: Optional[datetime] = None
     items: List[StockTransferItemOut] = []
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Branch Stock Detail (live, per-branch) ───────────────────────────────
+class BranchStockDetailOut(BaseModel):
+    product_id: int
+    sku: Optional[str] = None
+    name: str
+    category: str
+    on_hand: int
+    reserved: int
+    available: int  # on_hand - reserved
+    in_transit_in: int  # qty dispatched TO this branch, not yet received
+    in_transit_out: int  # qty dispatched FROM this branch, not yet received
+    avg_cost: float
+    value: float  # available * avg_cost
+    last_movement_at: Optional[datetime] = None
+    min_stock: int = 0
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StockMovementOut(BaseModel):
+    id: int
+    movement_type: str
+    qty: int
+    balance_after: int
+    reference_type: Optional[str] = None
+    reference_id: Optional[int] = None
+    idempotency_key: Optional[str] = None
+    note: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BranchStockMatrixRow(BaseModel):
+    product_id: int
+    name: str
+    sku: Optional[str] = None
+    category: str
+    total: int = 0
+    # Dynamic branch_<id> columns are set at runtime
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Split Restock (admin/global receipt) ──────────────────────────────────
+class RestockLineIn(BaseModel):
+    product_id: int
+    quantity: int = Field(ge=1)
+    unit_cost: Optional[float] = Field(default=None, ge=0)
+
+
+class RestockAllocationIn(BaseModel):
+    branch_id: int
+    items: List[RestockLineIn] = Field(min_length=1)
+
+
+class RestockIn(BaseModel):
+    reference: Optional[str] = Field(default=None, max_length=100)
+    allocations: List[RestockAllocationIn] = Field(min_length=1)
+    idempotency_key: Optional[str] = Field(default=None, max_length=64)
+
+
+class RestockLineOut(BaseModel):
+    product_id: int
+    product_name: str
+    branch_id: int
+    branch_name: str
+    quantity: int
+    unit_cost: Optional[float] = None
+
+
+class RestockOut(BaseModel):
+    reference: str
+    idempotency_key: Optional[str] = None
+    lines: List[RestockLineOut]
+    total_lines: int
+    total_quantity: int
     model_config = ConfigDict(from_attributes=True)

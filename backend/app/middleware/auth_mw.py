@@ -4,7 +4,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import models
 from ..auth import decode_token, is_account_expired
-from ..database import SessionLocal
+from ..database import get_db
 
 PUBLIC_EXACT = {"/", "/ws", "/auth/login", "/auth/refresh"}
 PUBLIC_PREFIXES = ("/docs", "/redoc", "/openapi.json")
@@ -32,11 +32,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         except Exception:
             return self._unauthorized("Invalid or expired token")
 
-        db = SessionLocal()
+        db_gen = get_db()
+        db = next(db_gen)
         try:
             user = db.get(models.User, user_id)
         finally:
-            db.close()
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
 
         if user is None or not user.is_active:
             return self._unauthorized("User not found or inactive")

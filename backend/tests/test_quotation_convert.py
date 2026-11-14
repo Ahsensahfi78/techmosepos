@@ -35,6 +35,16 @@ def db_session():
     session.add(product)
     session.commit()
 
+    # Create dummy branch
+    branch = models.Branch(
+        name="Test Branch",
+        code="TST",
+        type="store",
+        is_active=True,
+    )
+    session.add(branch)
+    session.commit()
+
     yield session
     session.close()
 
@@ -63,12 +73,18 @@ def test_convert_quotation_idempotent(db_session):
     assert quotation.status == models.QuotationStatus.DRAFT.value
 
     # First conversion
+    branch = db_session.query(models.Branch).first()
+    from app.services.stock_service import StockService
+    StockService.purchase_receipt(
+        db=db_session, branch_id=branch.id, deltas={product.id: 10}, user_id=1
+    )
     sale1, already_converted1 = quotation_service.convert_quotation(
         db_session,
         quotation.id,
         payment_method="cash",
         paid=300.0,
         user_id=1,
+        branch_id=branch.id,
     )
     assert already_converted1 is False
     assert sale1 is not None

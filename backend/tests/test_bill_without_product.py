@@ -24,6 +24,13 @@ def db():
     session.close()
 
 
+def _make_branch(db) -> int:
+    b = models.Branch(name="Test Branch", code="TST", type="store", is_active=True)
+    db.add(b)
+    db.flush()
+    return b.id
+
+
 def test_custom_bill_without_product_creation(db):
     # Create sale containing only ad-hoc items (no product database records required)
     sale_in = schemas.SaleIn(
@@ -49,7 +56,8 @@ def test_custom_bill_without_product_creation(db):
         paid_amount=5300.0,
     )
 
-    sale = sales_service.create_sale(db, sale_in, user_id=None)
+    branch_id = _make_branch(db)
+    sale = sales_service.create_sale(db, sale_in, user_id=None, branch_id=branch_id)
 
     assert sale.id is not None
     assert len(sale.items) == 2
@@ -108,7 +116,13 @@ def test_mixed_bill_product_and_custom_item(db):
         paid_amount=4500.0,
     )
 
-    sale = sales_service.create_sale(db, sale_in, user_id=None)
+    branch_id = _make_branch(db)
+    # Stock the branch before selling
+    from app.services.stock_service import StockService
+    StockService.purchase_receipt(
+        db=db, branch_id=branch_id, deltas={prod.id: 10}, user_id=None
+    )
+    sale = sales_service.create_sale(db, sale_in, user_id=None, branch_id=branch_id)
 
     assert sale.id is not None
     assert len(sale.items) == 2
@@ -136,7 +150,8 @@ async def test_broadcast_sale_handles_custom_items_without_error(db):
         paid_amount=1000.0,
     )
 
-    sale = sales_service.create_sale(db, sale_in, user_id=None)
+    branch_id = _make_branch(db)
+    sale = sales_service.create_sale(db, sale_in, user_id=None, branch_id=branch_id)
     # This should execute cleanly without crashing
     await _broadcast_sale(sale)
 

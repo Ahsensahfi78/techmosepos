@@ -100,6 +100,7 @@ const CASHIER_PERMISSIONS = new Set<string>([
   "branch.view",
   "quotation.view",
   "quotation.manage",
+  "tools.view",
 ]);
 
 export const ROLE_PERMISSIONS: Record<string, ReadonlySet<string>> = {

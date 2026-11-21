@@ -38,7 +38,7 @@ const secondaryLinks = [
   { href: "/users", label: "Users", icon: "👥", adminOnly: true },
   { href: "/audit", label: "Audit", icon: "🕵️‍♀️", adminOnly: true },
   { href: "/settings", label: "Settings", icon: "⚙️", adminOnly: true },
-  { href: "/backup-data", label: "Tools", icon: "🗄️", adminOnly: true },
+  { href: "/backup-data", label: "Tools", icon: "🗄️", permission: "tools.view" },
 ];
 
 const mobileBottomLinks = [

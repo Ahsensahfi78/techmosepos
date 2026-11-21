@@ -51,6 +51,8 @@ ALL_PERMISSIONS: set[str] = {
     "branch.view",
     "transfer.manage",
     "transfer.view",
+    "tools.view",
+    "tools.manage",
 }
 
 _MANAGER_PERMISSIONS: set[str] = {
@@ -145,6 +147,7 @@ _CASHIER_PERMISSIONS: set[str] = {
     "branch.view",
     "quotation.view",
     "quotation.manage",
+    "tools.view",
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {

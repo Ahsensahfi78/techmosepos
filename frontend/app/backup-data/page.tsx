@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { can } from "@/lib/nlp/permissions";
 import { useToast } from "@/components/ui/Toast";
 import EmptyState from "@/components/ui/EmptyState";
 import PageHeader from "@/components/ui/PageHeader";
@@ -10,9 +11,7 @@ import PageHeader from "@/components/ui/PageHeader";
 export default function BackupDataPage() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const isAdmin = user?.role === "super_admin" || user?.role === "admin";
-  const canExport =
-    isAdmin || user?.role === "manager" || user?.role === "accountant";
+  const canExport = can(user?.role, "tools.view");
 
   const restoreRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
@@ -72,7 +71,7 @@ export default function BackupDataPage() {
     }
   }
 
-  if (!isAdmin && !canExport) {
+  if (!canExport) {
     return (
       <EmptyState
         icon="🚫"
@@ -88,7 +87,7 @@ export default function BackupDataPage() {
         title="Data tools"
         subtitle="Backup, restore and import/export your TechMOS data"
       />
-
+  
       <div className="grid gap-4 md:grid-cols-2">
         <section className="card">
           <div className="card-header">
@@ -102,7 +101,7 @@ export default function BackupDataPage() {
             previously downloaded file. Restoring replaces all current data.
           </p>
           <div className="flex flex-wrap gap-2">
-            {isAdmin && (
+            {canExport && (
               <button
                 onClick={handleDownload}
                 className="btn btn-primary"
@@ -110,7 +109,7 @@ export default function BackupDataPage() {
                 ⬇ Download backup
               </button>
             )}
-            {isAdmin && (
+            {canExport && (
               <>
                 <button
                   onClick={() => restoreRef.current?.click()}
@@ -149,7 +148,7 @@ export default function BackupDataPage() {
             >
               ⬇ Export products CSV
             </button>
-            {isAdmin && (
+            {canExport && (
               <>
                 <button
                   onClick={() => importRef.current?.click()}
@@ -170,8 +169,8 @@ export default function BackupDataPage() {
           </div>
         </section>
       </div>
-
-      {isAdmin && (
+  
+      {canExport && (
         <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-700">
           ⚠️ Restoring a backup replaces the entire database. Download a fresh
           backup before experimenting with a restore.

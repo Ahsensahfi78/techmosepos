@@ -176,17 +176,17 @@ def create_repair(
 ):
     # Branch resolved server-side from the authenticated user — never from payload.
     branch_id = None
-    if current.branch:
+    if current.role not in ("super_admin", "admin") and current.branch:
         branch_row = (
             db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
         )
         if branch_row:
             branch_id = branch_row.id
-    if not branch_id:
-        raise HTTPException(
-            status_code=400,
-            detail="No branch assigned to this user. Contact an administrator.",
-        )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="No branch assigned to this user. Contact an administrator.",
+            )
 
     cust_name = data.customer_name
     cust_phone = data.customer_phone

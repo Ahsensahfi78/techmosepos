@@ -151,11 +151,12 @@ async def create_sale(
 ):
     # Branch resolved server-side from the authenticated user — never from payload.
     branch_code = current.branch
+        
     # current.branch is a string (e.g. "kalmunai"); resolve to branch id (case-insensitive)
     branch_row = (
         db.query(models.Branch).filter(models.Branch.code.ilike(branch_code)).first()
-    ) if branch_code else None
-    if not branch_row:
+    ) if branch_code and current.role not in ("super_admin", "admin") else None
+    if not branch_row and current.role not in ("super_admin", "admin"):
         raise HTTPException(
             status_code=400,
             detail="No branch assigned to this user. Contact an administrator.",
@@ -164,7 +165,7 @@ async def create_sale(
         db,
         data,
         user_id=current.id,
-        branch_id=branch_row.id,
+        branch_id=branch_row.id if branch_row else None,
         idempotency_key=idempotency_key,
     )
     AuditLogRepository(db).log(

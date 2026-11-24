@@ -80,16 +80,19 @@ async def create_adjustment(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("inventory.manage")),
 ):
-    # Branch resolved server-side from the authenticated user.
-    branch_id = current.branch
-    branch_row = (
-        db.query(models.Branch).filter(models.Branch.code == branch_id).first()
-    ) if branch_id else None
-    if not branch_row:
-        raise HTTPException(
-            status_code=400,
-            detail="No branch assigned to this user. Contact an administrator.",
+    # Branch resolved server-side from the authenticated user — never from payload.
+    branch_id = None
+    if current.role not in ("super_admin", "admin") and current.branch:
+        branch_row = (
+            db.query(models.Branch).filter(models.Branch.code.ilike(current.branch)).first()
         )
+        if branch_row:
+            branch_id = branch_row.id
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="No branch assigned to this user. Contact an administrator.",
+            )
 
     adjustment = models.StockAdjustment(
         reference=_next_number(db),

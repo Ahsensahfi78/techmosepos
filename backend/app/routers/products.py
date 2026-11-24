@@ -97,7 +97,8 @@ async def create_product(
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("product.create")),
 ):
-    # Branch-scoped users can only create products for their own branch
+    # Branch-scoped users can only create products for their own branch.
+    # Admins can create products for any branch or without specifying one.
     target_branch_id = data.branch_id
     if current.role not in ("super_admin", "admin"):
         if current.branch:
@@ -106,7 +107,6 @@ async def create_product(
             )
             if branch_row:
                 user_branch_id = branch_row.id
-                # If the user explicitly specified a different branch, reject
                 if data.branch_id is not None and data.branch_id != user_branch_id:
                     raise HTTPException(
                         status_code=403,
@@ -123,8 +123,6 @@ async def create_product(
                 status_code=400,
                 detail="No branch assigned to your user account",
             )
-    elif data.branch_id is not None:
-        target_branch_id = data.branch_id
 
     product = crud.create_product(db, data, target_branch_id)
     await manager.broadcast(

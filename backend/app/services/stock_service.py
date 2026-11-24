@@ -188,17 +188,18 @@ class StockService:
                     )
 
             # Append immutable ledger row
-            db.execute(
-                text(
-                    """
-                    INSERT INTO stock_movements
-                        (branch_id, product_id, qty, quantity, movement_type,
-                         reference_type, reference_id, idempotency_key,
-                         unit_cost, balance_after, previous_quantity, new_quantity,
-                         note, created_by, created_at)
-                    VALUES
-                        (:b, :p, :q, :q, :mt, :rt, :rid, :ik,
-                         :uc, :ba, :pq, :ba, :note, :uid, datetime('now'))
+            if branch_id is not None:
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO stock_movements
+                            (branch_id, product_id, qty, quantity, movement_type,
+                             reference_type, reference_id, idempotency_key,
+                             unit_cost, balance_after, previous_quantity, new_quantity,
+                             note, created_by, created_at)
+                        VALUES
+                            (:b, :p, :q, :q, :mt, :rt, :rid, :ik,
+                             :uc, :ba, :pq, :ba, :note, :uid, datetime('now'))
                     """
                 ),
                 {
@@ -218,17 +219,18 @@ class StockService:
             )
 
             # Update the projection (branch_stocks.quantity)
-            db.execute(
-                text(
-                    """
-                    UPDATE branch_stocks
-                    SET quantity = :q, last_movement_at = datetime('now'),
-                        updated_at = datetime('now')
-                    WHERE product_id = :p AND branch_id = :b
-                    """
-                ),
-                {"q": new_balance, "p": product_id, "b": branch_id},
-            )
+            if branch_id is not None:
+                db.execute(
+                    text(
+                        """
+                        UPDATE branch_stocks
+                        SET quantity = :q, last_movement_at = datetime('now'),
+                            updated_at = datetime('now')
+                        WHERE product_id = :p AND branch_id = :b
+                        """
+                    ),
+                    {"q": new_balance, "p": product_id, "b": branch_id},
+                )
 
         # products.stock is a derived aggregate; the DB trigger keeps it in sync.
         # Safety net refresh for readers that query products.stock directly.

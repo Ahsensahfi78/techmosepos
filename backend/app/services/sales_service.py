@@ -80,13 +80,22 @@ def create_sale(
         raise HTTPException(status_code=400, detail="Sale must contain items")
 
     # Branch is resolved server-side — NEVER accepted from the request payload.
+    # Admins can create sales without specifying a branch_id.
     if branch_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Branch context required. Assign the user/register to a branch.",
-        )
-    branch = db.get(models.Branch, branch_id)
-    if branch is None or not branch.is_active:
+        if user_id is not None:
+            user = db.get(models.User, user_id)
+            if user and user.role not in ("super_admin", "admin"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Branch context required. Assign the user/register to a branch.",
+                )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Branch context required. Assign the user/register to a branch.",
+            )
+    branch = db.get(models.Branch, branch_id) if branch_id else None
+    if branch_id and (branch is None or not branch.is_active):
         raise HTTPException(status_code=400, detail="Invalid or inactive branch")
 
     customer = None

@@ -453,8 +453,8 @@ describe("permissions", () => {
     expect(can("cashier", "sales.create")).toBe(true);
   });
 
-  it("denies returns to a cashier", () => {
-    expect(can("cashier", "sales.return")).toBe(false);
+  it("allows returns for a cashier", () => {
+    expect(can("cashier", "sales.return")).toBe(true);
     expect(permissionForAction({ kind: "create_return", invoiceNo: null, product: null, qty: 1, term: "" })).toBe("sales.return");
   });
 

@@ -113,7 +113,7 @@ async def restore_backup(
 
 @router.get("/export/products")
 def export_products_csv(
-    _: models.User = Depends(require_permission("export.view")),
+    _: models.User = Depends(require_permission("tools.view")),
 ):
     from ..database import SessionLocal
 

@@ -123,7 +123,7 @@ export default function RepairsPage() {
         setBranchName(null);
         setBranches([]);
       });
-    }, [user?.branch, user?.role]);
+  }, [user?.branch, user?.role]);
 
   const loadRepairs = useCallback(async () => {
     try {
@@ -140,7 +140,7 @@ export default function RepairsPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, statusFilter]);
+  }, [search, statusFilter, branchId]);
 
   const loadMasterData = useCallback(async () => {
     try {

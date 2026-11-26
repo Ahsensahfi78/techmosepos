@@ -171,6 +171,7 @@ def export_products_csv(
 @router.post("/import/products", response_model=dict)
 async def import_products_csv(
     file: UploadFile,
+    branch_id: int | None = None,
     db: Session = Depends(get_db),
     current: models.User = Depends(require_permission("product.manage")),
 ):
@@ -178,13 +179,31 @@ async def import_products_csv(
     reader = csv.DictReader(io.StringIO(data))
     if reader.fieldnames is None or "name" not in reader.fieldnames:
         raise HTTPException(status_code=400, detail="CSV must include a 'name' column")
+    # Branch the imported products are assigned to: the user's own branch, or
+    # (admins only) the explicit ?branch_id=.
+    target_branch_id = _resolve_user_branch(db, current)
+    if target_branch_id is None and current.role not in ("super_admin", "admin") and current.branch:
+        raise HTTPException(status_code=400, detail="No branch found for your user account")
+    if target_branch_id is None:
+        target_branch_id = branch_id
+    if target_branch_id is not None and db.get(models.Branch, target_branch_id) is None:
+        raise HTTPException(status_code=400, detail="Branch not found")
     created = 0
     updated = 0
+    assigned = 0
     for row_num, line in enumerate(reader, start=2):
         name = (line.get("name") or "").strip()
         if not name:
             continue
+        csv_sku = (line.get("sku") or "").strip() or None
+        csv_barcode = (line.get("barcode") or "").strip() or None
+        # Match an existing product by name, then SKU, then barcode so a
+        # re-imported product is reused instead of duplicated.
         product = db.query(models.Product).filter(models.Product.name == name).first()
+        if product is None and csv_sku:
+            product = db.query(models.Product).filter(models.Product.sku == csv_sku).first()
+        if product is None and csv_barcode:
+            product = db.query(models.Product).filter(models.Product.barcode == csv_barcode).first()
         is_new = product is None
         if is_new:
             product = models.Product(name=name)
@@ -230,6 +249,12 @@ async def import_products_csv(
                 product.warranty_months = months
             if line.get("track_imei") in {"1", "true", "yes", "True", "Yes"}:
                 product.track_imei = True
+            if target_branch_id is not None:
+                db.flush()
+                if _assign_to_branch(
+                    db, product, target_branch_id, _opt_int(line.get("stock")), current.id
+                ):
+                    assigned += 1
         except (ValueError, TypeError):
             db.rollback()
             raise HTTPException(
@@ -241,10 +266,62 @@ async def import_products_csv(
         user_id=current.id,
         details=(
             f"Imported products CSV from '{file.filename}' "
-            f"({created} created, {updated} updated)"
+            f"({created} created, {updated} updated, {assigned} assigned to branch)"
         ),
     )
-    return {"success": True, "created": created, "updated": updated}
+    return {
+        "success": True,
+        "created": created,
+        "updated": updated,
+        "assigned": assigned,
+    }
+
+
+def _resolve_user_branch(db: Session, current: models.User) -> int | None:
+    if current.role in ("super_admin", "admin") or not current.branch:
+        return None
+    row = (
+        db.query(models.Branch)
+        .filter(models.Branch.code.ilike(current.branch))
+        .first()
+    )
+    return row.id if row else None
+
+
+def _assign_to_branch(
+    db: Session,
+    product: models.Product,
+    branch_id: int,
+    stock: int | None,
+    user_id: int,
+) -> bool:
+    """Make the product visible in the branch. Returns True if newly assigned.
+
+    A product already stocked in the branch keeps its quantity; a new
+    assignment starts at the CSV stock value (movement goes through StockService).
+    """
+    row = (
+        db.query(models.BranchStock)
+        .filter(
+            models.BranchStock.product_id == product.id,
+            models.BranchStock.branch_id == branch_id,
+        )
+        .first()
+    )
+    if row is not None:
+        return False
+    db.add(models.BranchStock(product_id=product.id, branch_id=branch_id, quantity=0))
+    db.flush()
+    if stock and stock > 0:
+        StockService.adjustment(
+            db,
+            branch_id=branch_id,
+            deltas={product.id: stock},
+            reference_type="csv_import",
+            user_id=user_id,
+            reason="CSV import",
+        )
+    return True
 
 
 def _opt_float(value) -> float | None:

@@ -69,7 +69,6 @@ def list_products(
         bs_rows = (
             db.query(models.BranchStock.product_id)
             .filter(models.BranchStock.branch_id == target_branch_id)
-            .filter(models.BranchStock.quantity > 0)
             .all()
         )
         branch_product_ids = {r[0] for r in bs_rows}
@@ -79,7 +78,6 @@ def list_products(
             r.product_id: r.quantity
             for r in db.query(models.BranchStock.product_id, models.BranchStock.quantity)
             .filter(models.BranchStock.branch_id == target_branch_id)
-            .filter(models.BranchStock.quantity > 0)
             .all()
         }
         result = []
@@ -169,7 +167,6 @@ async def update_product(
             .filter(
                 models.BranchStock.product_id == product_id,
                 models.BranchStock.branch_id == user_branch_id,
-                models.BranchStock.quantity > 0,
             )
             .first()
         )
@@ -190,7 +187,6 @@ async def update_product(
             .filter(
                 models.BranchStock.product_id == product_id,
                 models.BranchStock.branch_id == user_branch_id,
-                models.BranchStock.quantity > 0,
             )
             .first()
         )

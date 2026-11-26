@@ -866,7 +866,7 @@ class BranchStock(Base):
     __tablename__ = "branch_stocks"
 
     id = Column(Integer, primary_key=True, index=True)
-    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
     quantity = Column(Integer, nullable=False, default=0)
     reserved_quantity = Column(Integer, nullable=False, default=0)
@@ -887,7 +887,7 @@ class StockMovement(Base):
     __tablename__ = "stock_movements"
 
     id = Column(Integer, primary_key=True, index=True)
-    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
     qty = Column(Integer, nullable=False)  # signed qty (positive = in, negative = out)
     quantity = Column(Integer, nullable=False, default=0)  # legacy alias, kept in sync

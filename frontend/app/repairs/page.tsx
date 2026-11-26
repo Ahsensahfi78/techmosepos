@@ -90,12 +90,48 @@ export default function RepairsPage() {
   const [payAmount, setPayAmount] = useState("");
   const [paying, setPaying] = useState(false);
 
+  // Resolve user's branch code to branch_id for branch-scoped stock
+  const [branchId, setBranchId] = useState<number | undefined>(undefined);
+  const [branchName, setBranchName] = useState<string | null>(null);
+  const [branches, setBranches] = useState<{ id: number; name: string; code: string }[]>([]);
+
+  // Resolve user's branch code to branch_id for branch-scoped stock
+  useEffect(() => {
+    if (!user?.branch) {
+      setBranchId(undefined);
+      setBranchName(null);
+      setBranches([]);
+      return;
+    }
+    api.branches
+      .list()
+      .then((data) => {
+        const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+        const filteredBranches = isAdmin ? data : data.filter((b) => b.code.toLowerCase() === user!.branch!.toLowerCase());
+        setBranches(filteredBranches);
+        const b = filteredBranches.find((x) => x.code.toLowerCase() === user!.branch!.toLowerCase());
+        if (b) {
+          setBranchId(b.id);
+          setBranchName(b.name);
+        } else {
+          setBranchId(undefined);
+          setBranchName(null);
+        }
+      })
+      .catch(() => {
+        setBranchId(undefined);
+        setBranchName(null);
+        setBranches([]);
+      });
+    }, [user?.branch, user?.role]);
+
   const loadRepairs = useCallback(async () => {
     try {
       const data = await api.repairs.list({
         page_size: 100,
         q: search.trim() || undefined,
         status: statusFilter === "all" ? undefined : statusFilter,
+        ...(branchId ? { branch_id: branchId } : {}),
       });
       setRepairs(data.items);
       setTotal(data.total);

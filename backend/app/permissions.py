@@ -148,6 +148,7 @@ _CASHIER_PERMISSIONS: set[str] = {
     "quotation.view",
     "quotation.manage",
     "tools.view",
+    "tools.manage"
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {

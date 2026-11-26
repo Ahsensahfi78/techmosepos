@@ -172,7 +172,7 @@ def export_products_csv(
 async def import_products_csv(
     file: UploadFile,
     db: Session = Depends(get_db),
-    current: models.User = Depends(require_permission("backup.manage")),
+    current: models.User = Depends(require_permission("product.manage")),
 ):
     data = (await file.read()).decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(data))

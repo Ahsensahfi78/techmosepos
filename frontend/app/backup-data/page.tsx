@@ -12,6 +12,7 @@ export default function BackupDataPage() {
   const { user } = useAuth();
   const { toast } = useToast();
   const canExport = can(user?.role, "tools.view");
+  const canBackup = can(user?.role, "backup.manage");
 
   const restoreRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
@@ -101,7 +102,7 @@ export default function BackupDataPage() {
             previously downloaded file. Restoring replaces all current data.
           </p>
           <div className="flex flex-wrap gap-2">
-            {canExport && (
+            {canBackup && (
               <button
                 onClick={handleDownload}
                 className="btn btn-primary"
@@ -109,7 +110,7 @@ export default function BackupDataPage() {
                 ⬇ Download backup
               </button>
             )}
-            {canExport && (
+            {canBackup && (
               <>
                 <button
                   onClick={() => restoreRef.current?.click()}
@@ -170,7 +171,7 @@ export default function BackupDataPage() {
         </section>
       </div>
   
-      {canExport && (
+      {canBackup && (
         <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-700">
           ⚠️ Restoring a backup replaces the entire database. Download a fresh
           backup before experimenting with a restore.
